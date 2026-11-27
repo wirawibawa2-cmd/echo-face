@@ -2,7 +2,7 @@
 
 A minimal wandering face for Echo: two white eyes and a short rounded mouth on a black screen, with organic motion and twenty expressions. One self-contained page, built for iPhone Safari and Add to Home Screen. No build step, no libraries, no API keys.
 
-**Preview:** https://wirawibawa2-cmd.github.io/echo-face/?v=1
+**Preview:** https://wirawibawa2-cmd.github.io/echo-face/?v=2
 
 This is a standalone project. It is not Kira, and it is not the live Echo app.
 
