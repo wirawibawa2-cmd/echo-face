@@ -1,14 +1,15 @@
 {
   "name": "Echo",
   "short_name": "Echo",
-  "description": "Echo — a centered fire spirit",
+  "description": "Echo — a friendly fire spirit you can talk to",
   "display": "standalone",
-  "background_color": "#000000",
-  "theme_color": "#000000",
+  "background_color": "#070708",
+  "theme_color": "#070708",
   "orientation": "portrait",
-  "start_url": "./index.html?v=7",
+  "start_url": "./index.html?v=8",
   "icons": [
-    { "src": "icon-192.png?v=7", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icon-512.png?v=7", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+    { "src": "icon-192.png?v=8", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png?v=8", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512-maskable.png?v=8", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

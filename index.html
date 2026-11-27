@@ -2,119 +2,79 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Echo">
   <meta name="theme-color" content="#000000">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="Echo — a centered fire spirit.">
-  <link rel="manifest" href="manifest.webmanifest?v=7">
-  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=7">
-  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=7">
+  <meta name="description" content="Echo — a friendly fire spirit you can talk to.">
+  <link rel="manifest" href="manifest.webmanifest?v=8">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=8">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=8">
+  <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png?v=8">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=8">
+  <link rel="shortcut icon" href="favicon.ico?v=8">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/echo-app.css?v=8">
   <title>Echo</title>
-  <!-- echo-live-v7 -->
-  <style>
-    :root {
-      --sat: env(safe-area-inset-top, 0px);
-      --sab: env(safe-area-inset-bottom, 0px);
-      --sal: env(safe-area-inset-left, 0px);
-      --sar: env(safe-area-inset-right, 0px);
-    }
-    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      height: 100dvh;
-      background: #000;
-      color: #fff;
-      overflow: hidden;
-      position: fixed;
-      inset: 0;
-      touch-action: none;
-      user-select: none;
-      -webkit-user-select: none;
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
-    }
-    canvas {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      display: block;
-    }
-    #flame { z-index: 0; background: #000; }
-    #c { z-index: 1; background: transparent; }
-    #bar {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      padding: 8px 10px calc(8px + var(--sab));
-      padding-left: max(10px, var(--sal));
-      padding-right: max(10px, var(--sar));
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      z-index: 2;
-      background: linear-gradient(to top, rgba(0,0,0,0.82) 40%, rgba(0,0,0,0));
-      pointer-events: none;
-    }
-    #bar > * { pointer-events: auto; }
-    body.hide-ui #bar { display: none; }
-    #autoBtn { flex: 0 0 auto; }
-    #pills {
-      display: flex;
-      gap: 6px;
-      overflow-x: auto;
-      overflow-y: hidden;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
-      overscroll-behavior-x: contain;
-      touch-action: pan-x;
-      mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 18px), transparent);
-      -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 18px), transparent);
-    }
-    #pills::-webkit-scrollbar { display: none; }
-    button.pill {
-      appearance: none;
-      border: 1px solid rgba(255,255,255,0.12);
-      background: rgba(255,255,255,0.08);
-      color: rgba(255,255,255,0.84);
-      border-radius: 999px;
-      padding: 7px 11px;
-      font: 600 12px/1.15 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-      letter-spacing: 0.01em;
-      white-space: nowrap;
-      margin: 0;
-      cursor: pointer;
-    }
-    button.pill:active { transform: scale(0.97); }
-    button.pill[aria-pressed="true"] {
-      background: rgba(255,255,255,0.22);
-      border-color: rgba(255,255,255,0.28);
-      color: #fff;
-    }
-    #autoBtn[aria-pressed="true"] { background: rgba(255,255,255,0.28); }
-    #fps {
-      display: none;
-      position: fixed;
-      top: calc(6px + var(--sat));
-      right: max(8px, var(--sar));
-      font: 500 11px/1.2 ui-monospace, Menlo, monospace;
-      color: rgba(255,255,255,0.4);
-      z-index: 2;
-      pointer-events: none;
-    }
-    body.debug #fps { display: block; }
-  </style>
+  <!-- echo-live-v8 -->
 </head>
-<body>
-  <canvas id="flame" aria-hidden="true"></canvas>
-  <canvas id="c" aria-label="Echo"></canvas>
+<body class="home">
+  <div id="ember" aria-hidden="true"></div>
+  <div id="stage">
+    <canvas id="flame" aria-hidden="true"></canvas>
+    <canvas id="c" aria-label="Echo"></canvas>
+  </div>
+  <div id="shell">
+    <header id="topbar">
+      <div id="brand">
+        <div id="brand-spacer" aria-hidden="true"></div>
+        <div id="brand-text">
+          <div id="brand-name">Echo</div>
+          <div id="brand-sub">Here with you</div>
+        </div>
+      </div>
+      <div id="top-actions">
+        <button type="button" id="btnSettings" aria-label="Settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M5 12H3M21 12h-2M6.2 6.2l1.4 1.4M16.4 16.4l1.4 1.4M17.8 6.2l-1.4 1.4M7.6 16.4l-1.4 1.4"/></svg>
+        </button>
+        <button type="button" id="btnNew" aria-label="New chat">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 5v5h5"/></svg>
+        </button>
+      </div>
+    </header>
+    <section id="home">
+      <p id="hello">Hello</p>
+      <h1 id="home-title">How can I help you today?</h1>
+    </section>
+    <div id="log" aria-live="polite"></div>
+    <form id="composer" action="#">
+      <input id="input" type="text" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" placeholder="Ask Echo…">
+      <button type="button" id="btnMic" aria-label="Voice input">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 18v3"/></svg>
+      </button>
+      <button type="submit" id="btnSend" aria-label="Send">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+      </button>
+    </form>
+  </div>
+  <div id="sheet">
+    <div class="card" role="dialog" aria-labelledby="keyTitle">
+      <h2 id="keyTitle">Echo’s brain</h2>
+      <p>Paste a free Gemini API key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">aistudio.google.com/apikey</a>. It stays on this phone and is never uploaded to our servers. Without a key, Echo uses simple offline replies.</p>
+      <input id="keyInput" type="password" autocomplete="off" spellcheck="false" placeholder="Gemini API key">
+      <div class="row-btns">
+        <button type="button" class="primary" id="keySave">Save</button>
+        <button type="button" id="keyClear">Remove</button>
+        <button type="button" id="keyClose">Close</button>
+      </div>
+      <div class="status" id="keyStatus"></div>
+    </div>
+  </div>
   <div id="bar">
     <button type="button" class="pill" id="autoBtn" aria-pressed="false">Auto</button>
     <div id="pills" role="toolbar" aria-label="Expressions"></div>
@@ -125,7 +85,7 @@
     'use strict';
 
     // Cache-bust static assets so iPhone Safari picks up this version.
-    var ASSET_Q = '?v=7';
+    var ASSET_Q = '?v=8';
     function assetUrl(path) {
       return path + ASSET_Q;
     }
@@ -290,6 +250,7 @@
 
     if (debugOn) document.body.classList.add('debug');
     if (hideUi) document.body.classList.add('hide-ui');
+    if (flag('pills') || q.get('lab') === '1') document.body.classList.add('show-pills');
 
     var dpr = 1;
     var W = 1, H = 1, S = 1;
@@ -350,7 +311,7 @@
     }
 
     function bodyScale() {
-      if (colorReady) return clamp(Math.min(W, H) / 390, 0.72, 1.55) * 1.22;
+      if (colorReady) return 1.08;
       return (124 * S) / SOLID_W;
     }
 
@@ -723,8 +684,8 @@
         flameCanvas.width = dw;
         flameCanvas.height = dh;
       }
-      flameCanvas.style.width = W + 'px';
-      flameCanvas.style.height = H + 'px';
+      flameCanvas.style.width = '100%';
+      flameCanvas.style.height = '100%';
       gl.viewport(0, 0, dw, dh);
     }
 
@@ -763,13 +724,14 @@
     }
 
     function resize() {
-      W = window.innerWidth;
-      H = window.innerHeight;
+      // Stable design size; CSS scales #stage from home hero to header avatar.
+      W = 320;
+      H = 340;
       dpr = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = Math.round(W * dpr);
       canvas.height = Math.round(H * dpr);
-      canvas.style.width = W + 'px';
-      canvas.style.height = H + 'px';
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       readSafe();
       S = clamp(Math.min(W, H) / 430, 0.72, 1.55);
@@ -779,9 +741,9 @@
     }
 
     function placeCenter(init) {
-      var barH = (barEl && !hideUi) ? barEl.getBoundingClientRect().height : 0;
+      var barH = 0;
       rest.x = W / 2;
-      rest.y = safe.top + (H - safe.top - barH) / 2;
+      rest.y = H / 2;
       if (init || (!pos.x && !pos.y)) {
         pos.x = pos.tx = rest.x;
         pos.y = pos.ty = rest.y;
@@ -1949,8 +1911,11 @@
     window.addEventListener('blur', onUp);
 
     document.addEventListener('touchmove', function (e) {
-      if (e.target && e.target.closest && e.target.closest('#pills')) return;
-      e.preventDefault();
+      if (e.target && e.target.closest && e.target.closest('#pills, #log, #composer, #sheet, #input')) return;
+      if (e.target && e.target.closest && e.target.closest('#stage')) {
+        e.preventDefault();
+        return;
+      }
     }, { passive: false });
 
     window.addEventListener('resize', resize);
@@ -1987,8 +1952,8 @@
         flameCanvas.width = dw;
         flameCanvas.height = dh;
       }
-      flameCanvas.style.width = W + 'px';
-      flameCanvas.style.height = H + 'px';
+      flameCanvas.style.width = '100%';
+      flameCanvas.style.height = '100%';
       flame2d.setTransform(fdpr, 0, 0, fdpr, 0, 0);
     }
 
@@ -1996,8 +1961,7 @@
       if (!flame2d || !colorReady || !colorMeta) return;
       resizeFlame2D();
       flame2d.setTransform(Math.min(window.devicePixelRatio || 1, 2), 0, 0, Math.min(window.devicePixelRatio || 1, 2), 0, 0);
-      flame2d.fillStyle = '#000';
-      flame2d.fillRect(0, 0, W, H);
+      flame2d.clearRect(0, 0, W, H);
       var fi = flipFrameAt(now);
       var per = colorMeta.perSheet;
       var sheet = colorSheets[fi < per ? 0 : 1];
@@ -2014,6 +1978,42 @@
       flame2d.translate(-ANCHOR_X, -ANCHOR_Y);
       flame2d.drawImage(sheet, sx, sy, colorMeta.cellW, colorMeta.cellH, 0, 0, colorMeta.cellW, colorMeta.cellH);
       flame2d.restore();
+    }
+
+
+    function punchSheet(img, meta) {
+      var c = document.createElement('canvas');
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      var g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(img, 0, 0);
+      var w = c.width, h = c.height;
+      var data = g.getImageData(0, 0, w, h);
+      var d = data.data;
+      var cellW = meta.cellW, cellH = meta.cellH;
+      var feather = 16;
+      var x, y, i, r, gv, b, luma, a, lx, ly, edge, f;
+      for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+          i = (y * w + x) * 4;
+          r = d[i]; gv = d[i + 1]; b = d[i + 2];
+          luma = 0.2126 * r + 0.7152 * gv + 0.0722 * b;
+          a = d[i + 3];
+          if (luma < 10) a = 0;
+          else if (luma < 44) a = Math.round(a * (luma - 10) / 34);
+          lx = x % cellW;
+          ly = y % cellH;
+          edge = Math.min(lx, ly, cellW - 1 - lx, cellH - 1 - ly);
+          if (edge < feather) {
+            f = edge / feather;
+            f = f * f * (3 - 2 * f);
+            a = Math.round(a * f);
+          }
+          d[i + 3] = a;
+        }
+      }
+      g.putImageData(data, 0, 0);
+      return c;
     }
 
     function loadColorFlipbook() {
@@ -2040,7 +2040,7 @@
         files.forEach(function (name, idx) {
           var img = new Image();
           img.onload = function () {
-            colorSheets[idx] = img;
+            colorSheets[idx] = punchSheet(img, colorMeta);
             left -= 1;
             if (left <= 0) {
               colorReady = true;
@@ -2098,7 +2098,7 @@
     }
 
     if (flameCanvas) {
-      flame2d = flameCanvas.getContext('2d', { alpha: false, desynchronized: true });
+      flame2d = flameCanvas.getContext('2d', { alpha: true, desynchronized: true });
     }
     glOk = false;
     canvas.style.background = 'transparent';
@@ -2142,5 +2142,6 @@
     img.src = assetUrl('assets/flame-body.png');
   })();
   </script>
+  <script src="js/echo-chat.js?v=8"></script>
 </body>
 </html>
