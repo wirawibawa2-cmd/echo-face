@@ -1,4 +1,4 @@
-/* Echo chat brain + shell. Key lives only in localStorage. Never commit a key. ?v=8 */
+/* Echo chat brain + shell. Key lives only in localStorage. Never commit a key. ?v=81 */
 (function () {
   'use strict';
 
@@ -8,12 +8,13 @@
   var MAX_TURNS = 24;
   var MAX_CHARS = 14000;
 
-  // Strongest free-tier model first, then fallbacks (same family Kira uses).
+  // Stable documented free-tier generateContent models first
+  // (https://ai.google.dev/gemini-api/docs/models). Hydrogen stays as a last try.
   var MODELS = [
-    'gemini-4-hydrogen',
     'gemini-3.8-flash',
+    'gemini-flash-latest',
     'gemini-3.5-flash-lite',
-    'gemini-flash-latest'
+    'gemini-4-hydrogen'
   ];
   var DEFAULT_MODEL = MODELS[0];
   var ENDPOINT = function (m) {
@@ -48,8 +49,20 @@
   }
 
   function getKey() { return (lsGet(LS_KEY, '') || '').trim(); }
-  function setKey(v) { v = (v || '').trim(); if (v) lsSet(LS_KEY, v); else lsDel(LS_KEY); }
-  function getModel() { return lsGet(LS_MODEL, DEFAULT_MODEL) || DEFAULT_MODEL; }
+  function setKey(v) {
+    v = (v || '').trim();
+    if (v) lsSet(LS_KEY, v);
+    else lsDel(LS_KEY);
+    // New key: drop any remembered model and session error flags.
+    lsDel(LS_MODEL);
+    skipGrounding = true;
+    offlineNoteShown = false;
+  }
+  function getModel() {
+    var m = lsGet(LS_MODEL, '') || '';
+    if (m && MODELS.indexOf(m) !== -1) return m;
+    return DEFAULT_MODEL;
+  }
 
   function loadHist() {
     try {
@@ -70,11 +83,17 @@
     return e;
   }
 
-  var skipGrounding = false;
+  // Google Search grounding is not available on the Gemini API free tier
+  // (docs for gemini-3.8-flash and gemini-4-hydrogen, Nov 2026). Leave it off.
+  var skipGrounding = true;
+  var offlineNoteShown = false;
   var safetyOff = [
     'HARM_CATEGORY_HARASSMENT', 'HARM_CATEGORY_HATE_SPEECH',
     'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'HARM_CATEGORY_DANGEROUS_CONTENT'
   ].map(function (c) { return { category: c, threshold: 'BLOCK_NONE' }; });
+
+  // Drop a v8 preference that always led with Hydrogen.
+  if (lsGet(LS_MODEL, '') === 'gemini-4-hydrogen') lsDel(LS_MODEL);
 
   function historyToContents(msgs) {
     var trimmed = msgs.slice(-MAX_TURNS);
@@ -90,11 +109,39 @@
     });
   }
 
+  function errorBlob(data, fallback) {
+    var err = data && data.error;
+    if (!err) return String(fallback || '');
+    var details = '';
+    try { details = JSON.stringify(err.details || err); } catch (e) { details = ''; }
+    return [err.message, err.status, err.reason, details, fallback].filter(Boolean).join(' ');
+  }
+
+  function classifyHttpError(status, blob) {
+    if (/API_KEY_INVALID|API_KEY_MISSING|API key not valid|API key expired|invalid api key/i.test(blob)) return 'key';
+    if (status === 400 && /API key/i.test(blob)) return 'key';
+    if (status === 401) return 'key';
+    if (status === 404 || /not found|not supported for|is not found for API version|NOT_FOUND/i.test(blob)) return 'model';
+    if (status === 429 || /RESOURCE_EXHAUSTED|quota exceeded|rate.?limit/i.test(blob)) return 'quota';
+    if (status === 403) {
+      if (/API_KEY_INVALID|API key not valid|API key/i.test(blob)) return 'key';
+      return 'api';
+    }
+    return 'api';
+  }
+
+  function briefErr(err) {
+    var s = err && err.status ? String(err.status) : '';
+    var m = String((err && err.message) || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+    if (!s && !m) return '';
+    return [s, m].filter(Boolean).join(' — ');
+  }
+
   async function callOnce(key, model, contents, useGrounding, signal) {
     var body = {
       systemInstruction: { parts: [{ text: SYSTEM }] },
       contents: contents,
-      generationConfig: { maxOutputTokens: 1024, temperature: 0.8 }
+      generationConfig: { maxOutputTokens: 4096, temperature: 0.8 }
     };
     body.safetySettings = safetyOff;
     if (useGrounding && !skipGrounding) body.tools = [{ google_search: {} }];
@@ -113,17 +160,17 @@
     try { data = await res.json(); } catch (e2) {}
     if (!res.ok) {
       var msg = (data && data.error && data.error.message) || res.statusText || '';
-      var details = JSON.stringify((data && data.error && data.error.details) || '');
-      var blob = msg + details;
-      if (useGrounding && res.status === 400 && /tool|google_search|ground/i.test(blob)) {
+      var blob = errorBlob(data, msg);
+      if (useGrounding && !skipGrounding && /tool|google_search|ground/i.test(blob)) {
         skipGrounding = true;
         return callOnce(key, model, contents, false, signal);
       }
-      if (res.status === 400 && /API_KEY_INVALID|API key not valid/i.test(blob)) throw GeminiError('key', msg, 400);
-      if (res.status === 401 || res.status === 403) throw GeminiError('key', msg, res.status);
-      if (res.status === 404 || /not found|not supported|retired/i.test(msg)) throw GeminiError('model', msg, res.status);
-      if (res.status === 429) throw GeminiError('quota', msg, 429);
-      throw GeminiError('api', msg, res.status);
+      // Free-tier grounding often comes back as 429, not 400 — retry bare once.
+      if (useGrounding && !skipGrounding && (res.status === 429 || res.status === 400 || res.status === 403)) {
+        skipGrounding = true;
+        return callOnce(key, model, contents, false, signal);
+      }
+      throw GeminiError(classifyHttpError(res.status, blob), msg, res.status);
     }
     var cand = data && data.candidates && data.candidates[0];
     var parts = (cand && cand.content && cand.content.parts) || [];
@@ -144,8 +191,8 @@
     var i;
     for (i = 0; i < order.length; i++) {
       try {
-        var text = await callOnce(key, order[i], historyToContents(msgs), true, signal);
-        if (order[i] !== preferred) lsSet(LS_MODEL, order[i]);
+        var text = await callOnce(key, order[i], historyToContents(msgs), !skipGrounding, signal);
+        lsSet(LS_MODEL, order[i]);
         return text;
       } catch (err) {
         last = err;
@@ -171,6 +218,7 @@
   }
 
   var OFFLINE = [
+    { re: /\boffline mode\b|chat offline|use offline/i, text: "Okay. I'll keep things simple for now, and I'll try Gemini again the next time you ask something.", expr: 'content' },
     { re: /help|what can you|who are you|your name/i, text: "I'm Echo, a little fire spirit. I can chat, answer questions, and think things through with you. For the smartest replies, add a free Gemini key in settings.", expr: 'happy' },
     { re: /key|gemini|api|aistudio|brain|setup|set up/i, text: "Open aistudio.google.com/apikey, create a free key, then tap the settings icon and paste it here. It stays on this phone only.", expr: 'content' },
     { re: /hello|hi\b|hey|good morning|good evening/i, text: "Hey. I'm here. What's on your mind?", expr: 'happy' },
@@ -183,13 +231,30 @@
     { re: /how are you|how's it going/i, text: "Warm and steady. How are you?", expr: 'happy' }
   ];
 
-  function offlineReply(userText) {
+  function wantsOffline(text) {
+    return /\boffline mode\b|chat offline|use offline/i.test(text || '');
+  }
+
+  function offlineReply(userText, hasKey) {
     var i;
     for (i = 0; i < OFFLINE.length; i++) {
-      if (OFFLINE[i].re.test(userText)) return { text: OFFLINE[i].text, expr: OFFLINE[i].expr, offline: true };
+      if (OFFLINE[i].re.test(userText)) {
+        var hit = { text: OFFLINE[i].text, expr: OFFLINE[i].expr, offline: true };
+        if (hasKey && /add a free Gemini key/i.test(hit.text)) {
+          hit.text = "I'm Echo, a little fire spirit. I can still chat in simple mode — ask me something and I'll do my best, and I'll try Gemini again on the next message.";
+        }
+        return hit;
+      }
+    }
+    if (hasKey) {
+      return {
+        text: "I'll give a simple take for now. Ask me again in a moment and I'll try the full brain, or check the key in Settings if this keeps happening.",
+        expr: 'content',
+        offline: true
+      };
     }
     return {
-      text: "I'd love to think that through with you, but my full brain needs a free Gemini key. Open aistudio.google.com/apikey, then paste it in settings — it never leaves this phone. Until then, ask me something simple, or add the key and I'll go deeper.",
+      text: "I'd love to think that through with you, but I need a Gemini API key first. Open aistudio.google.com/apikey, then paste it in Settings — it never leaves this phone.",
       expr: 'content',
       offline: true
     };
@@ -214,10 +279,6 @@
   var busy = false;
   var abortCtl = null;
   var avatarSrc = (function () {
-    var s = document.querySelector('script[src*="echo-chat"]');
-    // assets live next to index on root, or under preview/assets
-    var path = location.pathname;
-    if (/\/preview\/?$/.test(path) || /\/preview\//.test(path)) return 'assets/echo-avatar.png';
     return 'assets/echo-avatar.png';
   })();
 
@@ -271,6 +332,12 @@
     bubble.className = 'bubble';
     if (opts.thinking) bubble.textContent = 'Thinking…';
     else linkify(bubble, text);
+    if (opts.hint) {
+      var hint = document.createElement('span');
+      hint.className = 'hint';
+      hint.textContent = opts.hint;
+      bubble.appendChild(hint);
+    }
     row.appendChild(bubble);
     logEl.appendChild(row);
     logEl.scrollTop = logEl.scrollHeight;
@@ -279,9 +346,10 @@
 
   function renderAll() {
     logEl.innerHTML = '';
-    var i;
+    var i, m;
     for (i = 0; i < msgs.length; i++) {
-      addRow(msgs[i].role === 'user' ? 'user' : 'agent', msgs[i].text);
+      m = msgs[i];
+      addRow(m.role === 'user' ? 'user' : 'agent', m.text, { hint: m.hint });
     }
     logEl.scrollTop = logEl.scrollHeight;
   }
@@ -308,6 +376,35 @@
     if (inputEl) inputEl.focus();
   }
 
+  function fallbackFromError(err, userText, hasKey) {
+    var kind = err && err.kind;
+    var hint = '';
+    var result;
+    if (kind === 'key') {
+      return {
+        text: "That Gemini key doesn't look valid. Open Settings and paste a new one from aistudio.google.com/apikey.",
+        expr: 'worried',
+        hint: briefErr(err)
+      };
+    }
+    result = offlineReply(userText, hasKey);
+    if (kind === 'quota') {
+      hint = "Gemini is busy or its free limit was hit. I'll try it again on your next message.";
+    } else if (kind === 'blocked') {
+      return { text: "I can't go into that. Ask me something else and I'll help.", expr: 'unamused' };
+    } else if (kind === 'timeout') {
+      hint = "Gemini took too long, so I'll keep it simple for now.";
+    } else if (kind === 'network') {
+      hint = "I couldn't reach Gemini. I'll try again next time.";
+    } else {
+      hint = "Couldn't use Gemini" + (briefErr(err) ? ' (' + briefErr(err) + ')' : '') + ". I'll try again on the next message.";
+    }
+    if (offlineNoteShown) hint = '';
+    else offlineNoteShown = true;
+    result.hint = hint;
+    return result;
+  }
+
   async function send(text) {
     text = String(text || '').trim();
     if (!text || busy) return;
@@ -324,27 +421,24 @@
     var key = getKey();
     var result;
     try {
-      if (key) {
+      if (key && !wantsOffline(text)) {
         abortCtl = typeof AbortController !== 'undefined' ? new AbortController() : null;
         var raw = await askGemini(key, msgs, abortCtl && abortCtl.signal);
         result = parseReply(raw);
-      } else {
+      } else if (!key && !wantsOffline(text)) {
         await new Promise(function (r) { setTimeout(r, 420); });
-        result = offlineReply(text);
+        result = offlineReply(text, false);
+      } else {
+        await new Promise(function (r) { setTimeout(r, 280); });
+        result = offlineReply(text, !!key);
       }
     } catch (err) {
-      var kind = err && err.kind;
-      if (kind === 'key') result = { text: "That Gemini key doesn't look valid. Open settings and paste a new one from aistudio.google.com/apikey.", expr: 'worried' };
-      else if (kind === 'quota') result = { text: "The free Gemini quota looks used up right now. Try again in a little while, or I can keep chatting in simple offline mode.", expr: 'sad' };
-      else if (kind === 'blocked') result = { text: "I can't go into that. Ask me something else and I'll help.", expr: 'unamused' };
-      else if (kind === 'timeout') result = { text: "That took too long. Want to try again?", expr: 'worried' };
-      else if (kind === 'network') result = { text: "I couldn't reach Gemini. Check your connection, or keep chatting offline.", expr: 'sad' };
-      else result = { text: "Something went wrong on my side. Try once more in a moment.", expr: 'worried' };
+      result = fallbackFromError(err, text, !!key);
     }
     if (think && think.parentNode) think.parentNode.removeChild(think);
-    msgs.push({ role: 'echo', text: result.text, expr: result.expr });
+    msgs.push({ role: 'echo', text: result.text, expr: result.expr, hint: result.hint || '' });
     saveHist(msgs);
-    addRow('agent', result.text);
+    addRow('agent', result.text, { hint: result.hint });
     setSub('Here with you');
     face(result.expr || 'content', true);
     setTimeout(function () { face(result.expr || 'content', false); }, Math.min(2400, 400 + result.text.length * 18));

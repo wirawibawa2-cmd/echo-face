@@ -2,9 +2,9 @@
 
 A moving preview of Echo as a lively flame spirit. Pure black background, approved face proportions, no libraries.
 
-**Live:** https://wirawibawa2-cmd.github.io/echo-face/preview/?v=8
+**Live:** https://wirawibawa2-cmd.github.io/echo-face/preview/?v=81
 
-The same build is now also the app at the [repo root](https://wirawibawa2-cmd.github.io/echo-face/?v=8).
+The same build is now also the app at the [repo root](https://wirawibawa2-cmd.github.io/echo-face/?v=81).
 
 This lives at `/preview/` as a working copy of the same chat app as the repo root.
 

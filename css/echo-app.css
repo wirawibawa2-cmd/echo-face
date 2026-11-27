@@ -1,4 +1,4 @@
-/* Echo chat shell — glass panel, dotted field, ember palette. ?v=8 */
+/* Echo chat shell — glass panel, dotted field, ember palette. ?v=81 */
 :root {
   --sat: env(safe-area-inset-top, 0px);
   --sab: env(safe-area-inset-bottom, 0px);
@@ -94,8 +94,8 @@ body {
 body.is-chat #stage {
   top: calc(max(8px, var(--sat)) + 10px);
   left: calc(max(8px, var(--sal)) + 16px);
-  width: 52px;
-  height: 52px;
+  width: 68px;
+  height: 68px;
   transform: none;
   border-radius: 50%;
   overflow: hidden;
@@ -107,8 +107,8 @@ body.is-chat #stage {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px 8px 16px;
-  min-height: 56px;
+  padding: 10px 14px 10px 16px;
+  min-height: 88px;
   flex: 0 0 auto;
   opacity: 0;
   pointer-events: none;
@@ -131,8 +131,8 @@ body.home #brand { opacity: 0; pointer-events: none; }
   min-width: 0;
 }
 #brand-spacer {
-  width: 52px;
-  height: 52px;
+  width: 68px;
+  height: 68px;
   flex: 0 0 auto;
 }
 #brand-name {
@@ -258,6 +258,15 @@ body.is-chat #log { display: block; }
   -webkit-user-select: text;
 }
 .row a { color: #f0a060; text-decoration: underline; }
+.row .hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--muted);
+  letter-spacing: -0.01em;
+}
 
 .row.thinking .ava {
   box-shadow: 0 0 16px rgba(255, 160, 70, 0.7), 0 0 2px #fff;
