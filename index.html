@@ -9,11 +9,12 @@
   <meta name="apple-mobile-web-app-title" content="Echo">
   <meta name="theme-color" content="#000000">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="Echo face preview — a minimal wandering face.">
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="apple-touch-icon" href="apple-touch-icon.png">
-  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+  <meta name="description" content="Echo — a centered fire spirit.">
+  <link rel="manifest" href="manifest.webmanifest?v=7">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=7">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=7">
   <title>Echo</title>
+  <!-- echo-live-v7 -->
   <style>
     :root {
       --sat: env(safe-area-inset-top, 0px);
@@ -44,8 +45,9 @@
       width: 100%;
       height: 100%;
       display: block;
-      background: #000;
     }
+    #flame { z-index: 0; background: #000; }
+    #c { z-index: 1; background: transparent; }
     #bar {
       position: fixed;
       left: 0;
@@ -63,9 +65,7 @@
     }
     #bar > * { pointer-events: auto; }
     body.hide-ui #bar { display: none; }
-    #autoBtn {
-      flex: 0 0 auto;
-    }
+    #autoBtn { flex: 0 0 auto; }
     #pills {
       display: flex;
       gap: 6px;
@@ -98,9 +98,7 @@
       border-color: rgba(255,255,255,0.28);
       color: #fff;
     }
-    #autoBtn[aria-pressed="true"] {
-      background: rgba(255,255,255,0.28);
-    }
+    #autoBtn[aria-pressed="true"] { background: rgba(255,255,255,0.28); }
     #fps {
       display: none;
       position: fixed;
@@ -115,6 +113,7 @@
   </style>
 </head>
 <body>
+  <canvas id="flame" aria-hidden="true"></canvas>
   <canvas id="c" aria-label="Echo"></canvas>
   <div id="bar">
     <button type="button" class="pill" id="autoBtn" aria-pressed="false">Auto</button>
@@ -125,152 +124,121 @@
   (function () {
     'use strict';
 
+    // Cache-bust static assets so iPhone Safari picks up this version.
+    var ASSET_Q = '?v=7';
+    function assetUrl(path) {
+      return path + ASSET_Q;
+    }
+
+
+    // Sprite landmarks, in flame-body.png pixels (cropped lively-white-v5, no face).
+    var IMG_W = 720, IMG_H = 939;
+    var FACE_CX = 358.0, FACE_CY = 510.9, EYE_D = 35.4, GAP = 1.20;
+    var SOLID_L = 255, SOLID_R = 459, SOLID_T = 253, SOLID_B = 687;
+    var BULB_CX = 358.0, BULB_CY = 500.1;
+    var TIP_X = 361, TIP_Y = 253;
+    var DRIPS = [{ x: 345, y: 632 }, { x: 368, y: 685 }];
+    var MOUTH_FRAC = 0.70, MOUTH_THICK = 0.22;
+    var SOLID_W = SOLID_R - SOLID_L;
+
     var EXPRESSION_NAMES = [
-      'neutral', 'happy', 'veryHappy', 'laugh', 'sad', 'crying', 'angry',
-      'surprised', 'shocked', 'sleepy', 'sleeping', 'curious', 'confused',
-      'sly', 'love', 'wink', 'embarrassed', 'thinking', 'talking', 'listening'
+      'happy', 'sad', 'veryHappy', 'wavy', 'content', 'disappointed',
+      'angry', 'dizzy', 'squint', 'wink', 'unamused', 'worried'
     ];
 
     var LABELS = {
-      neutral: 'Neutral', happy: 'Happy', veryHappy: 'Very happy', laugh: 'Laugh',
-      sad: 'Sad', crying: 'Crying', angry: 'Angry', surprised: 'Surprised',
-      shocked: 'Shocked', sleepy: 'Sleepy', sleeping: 'Sleeping',
-      curious: 'Curious', confused: 'Confused', sly: 'Sly', love: 'Love',
-      wink: 'Wink', embarrassed: 'Embarrassed', thinking: 'Thinking',
-      talking: 'Talking', listening: 'Listening'
+      happy: 'Happy', sad: 'Sad', veryHappy: 'Very happy', wavy: 'Wavy',
+      content: 'Content', disappointed: 'Disappointed', angry: 'Angry',
+      dizzy: 'Dizzy', squint: 'Squint', wink: 'Wink',
+      unamused: 'Unamused', worried: 'Worried',
+      neutral: 'Neutral', talking: 'Talking'
     };
 
     var ALIASES = {
-      idle: 'neutral', default: 'neutral',
       'very-happy': 'veryHappy', veryhappy: 'veryHappy', 'very happy': 'veryHappy',
-      cry: 'crying', tears: 'crying',
-      surprise: 'surprised', shock: 'shocked',
-      sleep: 'sleeping', asleep: 'sleeping', yawn: 'sleepy',
-      smug: 'sly', smirk: 'sly',
-      hearts: 'love', heart: 'love',
-      shy: 'embarrassed', embarrassed: 'embarrassed', embarassed: 'embarrassed',
-      think: 'thinking', listen: 'listening', talk: 'talking',
-      mad: 'angry', wow: 'surprised'
+      smile: 'happy', frown: 'sad',
+      default: 'neutral', idle: 'neutral',
+      talk: 'talking',
+      mad: 'angry', wow: 'veryHappy',
+      bored: 'unamused', deadpan: 'unamused',
+      nervous: 'worried', concern: 'worried'
     };
 
+    // Eye kinds: circle, happyArc, sadArc, caret, chevron, ex, flat, slit
     function baseParams() {
       return {
-        eyeLX: -40, eyeLY: -14, eyeLrx: 15, eyeLry: 15, eyeLrot: 0,
-        eyeLopen: 1, eyeLarc: 0, eyeLheart: 0,
-        eyeRX: 40, eyeRY: -14, eyeRrx: 15, eyeRry: 15, eyeRrot: 0,
-        eyeRopen: 1, eyeRarc: 0, eyeRheart: 0,
-        mouthX: 0, mouthY: 28, mouthW: 34, mouthThick: 8,
-        mouthCurve: 0, mouthOpen: 0, mouthSmirk: 0, mouthWobble: 0,
-        blush: 0, tilt: 0, bounceAmp: 0, shakeAmp: 0, pulseAmp: 0,
-        tear: 0, zzz: 0, dots: 0, lookBiasX: 0, lookBiasY: 0
+        lCircle: 1, rCircle: 1,
+        lHappy: 0, rHappy: 0,
+        lSad: 0, rSad: 0,
+        lCaret: 0, rCaret: 0,
+        lChev: 0, rChev: 0, lChevDir: 1, rChevDir: -1,
+        lEx: 0, rEx: 0,
+        lFlat: 0, rFlat: 0,
+        lSlit: 0, rSlit: 0, lSlitRot: 0.45, rSlitRot: -0.45,
+        brow: 0,
+        mouthCurve: 1,
+        mouthW: MOUTH_FRAC,
+        mouthThick: MOUTH_THICK,
+        mouthWave: 0,
+        mouthOpen: 0,
+        lookBiasX: 0, lookBiasY: 0
       };
     }
 
+    function pCircle(extra) {
+      return Object.assign(baseParams(), extra || {});
+    }
+
     var EXPR = {};
-    EXPR.neutral = baseParams();
-    EXPR.happy = Object.assign(baseParams(), {
-      mouthW: 42, mouthCurve: 13, mouthThick: 8
+    EXPR.happy = pCircle({ mouthCurve: 1, mouthW: 0.70 });
+    EXPR.neutral = pCircle({ mouthCurve: 0, mouthW: 1.36, mouthOpen: 1, mouthThick: 0.22 });
+    EXPR.sad = pCircle({ mouthCurve: -1, mouthW: 0.70, lookBiasY: 0.22 });
+    EXPR.veryHappy = pCircle({
+      lCircle: 0, rCircle: 0, lCaret: 1, rCaret: 1,
+      mouthCurve: 1, mouthW: 0.75
     });
-    EXPR.veryHappy = Object.assign(baseParams(), {
-      eyeLY: -16, eyeRY: -16,
-      eyeLarc: 1, eyeRarc: 1, eyeLrx: 16, eyeRrx: 16, eyeLry: 7, eyeRry: 7,
-      mouthW: 48, mouthCurve: 17, mouthThick: 8.5, mouthY: 30
+    EXPR.wavy = pCircle({ mouthCurve: 0.25, mouthW: 0.80, mouthWave: 1 });
+    EXPR.content = pCircle({
+      lCircle: 0, rCircle: 0, lHappy: 1, rHappy: 1,
+      mouthCurve: 1, mouthW: 0.75
     });
-    EXPR.laugh = Object.assign(baseParams(), {
-      eyeLY: -16, eyeRY: -16,
-      eyeLarc: 1, eyeRarc: 1, eyeLrx: 16, eyeRrx: 16, eyeLry: 7, eyeRry: 7,
-      mouthW: 50, mouthCurve: 16, mouthOpen: 0.72, mouthThick: 9, mouthY: 30,
-      bounceAmp: 1
+    EXPR.disappointed = pCircle({
+      lCircle: 0, rCircle: 0, lSad: 1, rSad: 1,
+      mouthCurve: -1, mouthW: 0.70, lookBiasY: 0.2
     });
-    EXPR.sad = Object.assign(baseParams(), {
-      eyeLY: -10, eyeRY: -10, eyeLry: 13.5, eyeRry: 13.5, eyeLrx: 15, eyeRrx: 15,
-      mouthW: 30, mouthCurve: -12, mouthY: 32, mouthThick: 7.5,
-      lookBiasY: 0.28
+    EXPR.angry = pCircle({
+      lCircle: 0, rCircle: 0, lSlit: 1, rSlit: 1,
+      mouthCurve: -1, mouthW: 0.65, brow: 0.35
     });
-    EXPR.crying = Object.assign(baseParams(), {
-      eyeLY: -9, eyeRY: -9, eyeLry: 13, eyeRry: 13,
-      mouthW: 28, mouthCurve: -13, mouthY: 33, mouthThick: 7.5,
-      lookBiasY: 0.35, tear: 1, blush: 0.5
+    EXPR.dizzy = pCircle({
+      lCircle: 0, rCircle: 0, lEx: 1, rEx: 1,
+      mouthCurve: -0.85, mouthW: 0.62
     });
-    EXPR.angry = Object.assign(baseParams(), {
-      eyeLY: -12, eyeRY: -12,
-      eyeLrx: 16, eyeRrx: 16, eyeLry: 7, eyeRry: 7,
-      eyeLrot: 0.48, eyeRrot: -0.48,
-      mouthW: 26, mouthCurve: -5, mouthY: 30, mouthThick: 7
+    EXPR.squint = pCircle({
+      lCircle: 0, rCircle: 0, lChev: 1, rChev: 1,
+      lChevDir: 1, rChevDir: -1,
+      mouthCurve: 1, mouthW: 0.70
     });
-    EXPR.surprised = Object.assign(baseParams(), {
-      eyeLrx: 20, eyeLry: 20, eyeRrx: 20, eyeRry: 20,
-      eyeLY: -18, eyeRY: -18,
-      mouthX: 0, mouthY: 32, mouthW: 20, mouthThick: 22, mouthOpen: 1, mouthCurve: 0
+    EXPR.wink = pCircle({
+      lCircle: 0, rCircle: 1, lChev: 1, rChev: 0,
+      lChevDir: 1,
+      mouthCurve: 1, mouthW: 0.70
     });
-    EXPR.shocked = Object.assign(baseParams(), {
-      eyeLrx: 23, eyeLry: 23, eyeRrx: 23, eyeRry: 23,
-      eyeLY: -20, eyeRY: -20, eyeLX: -42, eyeRX: 42,
-      mouthW: 24, mouthThick: 26, mouthOpen: 1, mouthY: 34, mouthCurve: 0,
-      shakeAmp: 1
+    EXPR.unamused = pCircle({
+      lCircle: 0, rCircle: 0, lFlat: 1, rFlat: 1,
+      mouthCurve: 0, mouthW: 0.72, mouthThick: 0.20
     });
-    EXPR.sleepy = Object.assign(baseParams(), {
-      eyeLopen: 0.4, eyeRopen: 0.34, eyeLry: 15, eyeRry: 15,
-      eyeLY: -10, eyeRY: -10,
-      mouthW: 12, mouthThick: 22, mouthOpen: 0.85, mouthY: 30, mouthCurve: 0,
-      lookBiasY: 0.2
+    EXPR.worried = pCircle({
+      mouthCurve: -1, mouthW: 0.70, brow: 1, lookBiasY: 0.12
     });
-    EXPR.sleeping = Object.assign(baseParams(), {
-      eyeLopen: 0, eyeRopen: 0, eyeLrx: 16, eyeRrx: 16, eyeLry: 3, eyeRry: 3,
-      eyeLY: -12, eyeRY: -12,
-      mouthW: 22, mouthThick: 6, mouthCurve: -2, mouthY: 30,
-      zzz: 1
-    });
-    EXPR.curious = Object.assign(baseParams(), {
-      eyeLrx: 14.5, eyeLry: 14.5, eyeRrx: 19, eyeRry: 19,
-      eyeLY: -14, eyeRY: -16,
-      tilt: -0.24, mouthW: 28, mouthCurve: 4, mouthThick: 7,
-      lookBiasX: 0.28, lookBiasY: -0.2
-    });
-    EXPR.confused = Object.assign(baseParams(), {
-      tilt: 0.24, mouthWobble: 1, mouthCurve: 3, mouthW: 32, mouthSmirk: 0.45,
-      eyeLry: 14, eyeRry: 16, eyeRrot: -0.12, eyeLrot: 0.08,
-      lookBiasX: -0.15
-    });
-    EXPR.sly = Object.assign(baseParams(), {
-      eyeLopen: 0.42, eyeRopen: 0.72, eyeLry: 15, eyeRry: 15,
-      mouthW: 36, mouthCurve: 11, mouthSmirk: 0.9, mouthY: 28,
-      tilt: 0.1, lookBiasX: 0.32
-    });
-    EXPR.love = Object.assign(baseParams(), {
-      eyeLheart: 1, eyeRheart: 1, eyeLrx: 17, eyeLry: 17, eyeRrx: 17, eyeRry: 17,
-      mouthW: 42, mouthCurve: 14, blush: 0.85
-    });
-    EXPR.wink = Object.assign(baseParams(), {
-      eyeLopen: 0, eyeLrx: 16, eyeLry: 3,
-      mouthW: 38, mouthCurve: 12, mouthSmirk: 0.4,
-      tilt: 0.12
-    });
-    EXPR.embarrassed = Object.assign(baseParams(), {
-      blush: 1, lookBiasX: 0.45, lookBiasY: 0.5,
-      mouthW: 24, mouthCurve: 6, mouthY: 30, mouthThick: 7,
-      eyeLopen: 0.92, eyeRopen: 0.92, tilt: 0.1
-    });
-    EXPR.thinking = Object.assign(baseParams(), {
-      lookBiasY: -0.72, lookBiasX: 0.18,
-      mouthX: 11, mouthW: 16, mouthThick: 6, mouthCurve: 3, mouthSmirk: 0.55,
-      eyeLry: 14, eyeRry: 14, dots: 1
-    });
-    EXPR.talking = Object.assign(baseParams(), {
-      mouthW: 36, mouthCurve: 5, mouthThick: 8
-    });
-    EXPR.listening = Object.assign(baseParams(), {
-      eyeLrx: 16.5, eyeLry: 16.5, eyeRrx: 16.5, eyeRry: 16.5,
-      mouthW: 30, mouthCurve: 4, mouthThick: 7, pulseAmp: 1
+    EXPR.talking = pCircle({
+      mouthCurve: 0.35, mouthW: 0.62, mouthOpen: 0.7, mouthThick: 0.20
     });
 
     var HOLD = {
       wink: [1.15, 1.7],
-      surprised: [1.35, 2.0],
-      shocked: [1.35, 2.0],
-      laugh: [2.2, 3.3],
-      sleeping: [3.6, 5.2],
-      talking: [2.8, 4.2],
+      dizzy: [1.6, 2.4],
+      talking: [2.4, 3.6],
       _default: [2.6, 4.4]
     };
 
@@ -279,8 +247,9 @@
       var key = String(name).trim();
       if (EXPR[key]) return key;
       var lower = key.toLowerCase();
-      if (ALIASES[lower]) return ALIASES[lower];
       if (EXPR[lower]) return lower;
+      if (ALIASES[lower]) return ALIASES[lower];
+      if (ALIASES[key]) return ALIASES[key];
       return null;
     }
 
@@ -291,14 +260,29 @@
       return v !== '0' && v !== 'false' && v !== 'no';
     }
 
-    var startName = resolveName(q.get('expr')) || 'neutral';
+    var startName = resolveName(q.get('expr')) || 'happy';
     var autoOn = flag('auto');
     var stillMode = flag('still');
     var debugOn = flag('debug');
     var hideUi = flag('hideui') || flag('demo') || q.get('ui') === '0';
+    var holdFps = flag('smooth') ? 0 : (parseFloat(q.get('hold')) || 22);
+    var blackFace = q.get('face') !== 'white' && !flag('whiteface');
+    var faceInk = blackFace ? '#1a0c08' : '#fff';
+    var faceShadeAmt = blackFace ? 0.0 : 1.0;
+    var flipMeta = null;
+    var flipReady = false;
+    var flipTex = null;
+    var flipCumul = [];
+    var flipTotal = 1;
+    var colorReady = false;
+    var colorMeta = null;
+    var colorSheets = [];
+    var flame2d = null;
+    var ANCHOR_X = FACE_CX;
+    var ANCHOR_Y = FACE_CY;
 
     var canvas = document.getElementById('c');
-    var ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+    var ctx = canvas.getContext('2d', { alpha: true, desynchronized: true });
     var fpsEl = document.getElementById('fps');
     var barEl = document.getElementById('bar');
     var pillsEl = document.getElementById('pills');
@@ -333,21 +317,51 @@
 
     var follow = null;
     var pokeUntil = 0;
-    var pokeReturn = 'neutral';
 
-    var tears = [];
-    var zzzs = [];
-    var nextTear = 0;
-    var nextZzz = 0;
+    var embers = [];
+    var drops = [];
+    var smokes = [];
+    var tongues = [];
+    var bits = [];
+    var nextEmber = 0;
+    var nextDrop = 0;
+    var nextSmoke = 0;
+    var nextTongue = 0;
+    var outline = null;
+    var rest = { x: 0, y: 0 };
+    var flare = 0;
+    var NECK_Y = 402;
 
     var time = 0;
+    var last = 0;
     var fpsAcc = 0, fpsFrames = 0, fpsVal = 60;
+
+    var bodyImg = null;
+    var glowCvs = null;
+    var softDot = null;
+    var ready = false;
+    var flickerN = 0;
 
     function lerp(a, b, t) { return a + (b - a) * t; }
     function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
     function rand(a, b) { return a + Math.random() * (b - a); }
     function expApproach(curV, tgt, rate, dt) {
       return curV + (tgt - curV) * (1 - Math.exp(-rate * dt));
+    }
+
+    function bodyScale() {
+      if (colorReady) return clamp(Math.min(W, H) / 390, 0.72, 1.55) * 1.22;
+      return (124 * S) / SOLID_W;
+    }
+
+    function extents() {
+      var sc = bodyScale();
+      return {
+        left: (ANCHOR_X - SOLID_L) * sc + 22,
+        right: (SOLID_R - ANCHOR_X) * sc + 22,
+        top: (ANCHOR_Y - SOLID_T) * sc + 40,
+        bot: (SOLID_B - ANCHOR_Y) * sc + 26
+      };
     }
 
     function readSafe() {
@@ -362,22 +376,396 @@
     function playable() {
       var barH = 0;
       if (barEl && !hideUi) barH = barEl.getBoundingClientRect().height;
-      var marginX = 108 * S;
-      var marginTop = 130 * S;
-      var marginBot = 100 * S;
-      var x0 = safe.left + 12 + marginX;
-      var y0 = safe.top + 16 + marginTop;
-      var x1 = W - safe.right - 12 - marginX;
-      var y1 = H - barH - 12 - marginBot;
-      if (x1 - x0 < 48) { x0 = W * 0.22; x1 = W * 0.78; }
-      if (y1 - y0 < 48) { y0 = H * 0.24; y1 = H * 0.62; }
+      var e = extents();
+      var x0 = safe.left + 10 + e.left;
+      var y0 = safe.top + 10 + e.top;
+      var x1 = W - safe.right - 10 - e.right;
+      var y1 = H - barH - 10 - e.bot;
+      if (x1 - x0 < 40) { x0 = W * 0.28; x1 = W * 0.72; }
+      if (y1 - y0 < 40) { y0 = H * 0.28; y1 = H * 0.62; }
       return { x0: x0, y0: y0, x1: x1, y1: y1 };
+    }
+
+
+    // --- WebGL1 procedural fire (raw, no libraries). Fallback is the canvas flame. ---
+    var flameCanvas = document.getElementById('flame');
+    var glOk = false;
+    var gl = null;
+    var glProg = null;
+    var glBuf = null;
+    var glUni = {};
+    var lastDraw = 0;
+
+    var FLAME_VERT = 'attribute vec2 aPos;void main(){gl_Position=vec4(aPos,0.0,1.0);}';
+
+    var FLAME_FRAG = [
+      '#ifdef GL_FRAGMENT_PRECISION_HIGH',
+      'precision highp float;',
+      '#else',
+      'precision mediump float;',
+      '#endif',
+      'uniform vec2 uRes;',
+      'uniform vec2 uCenter;',
+      'uniform vec2 uScale;',
+      'uniform float uAngle;',
+      'uniform float uTime;',
+      'uniform float uFlare;',
+      'uniform float uHold;',
+      'uniform sampler2D uAtlas;',
+      'uniform float uUseAtlas;',
+      'uniform float uFrame;',
+      'uniform vec4 uGrid;',
+      'uniform vec2 uFacePx;',
+      'uniform float uPx;',
+      'uniform float uSdfRange;',
+      'uniform float uFaceShade;',
+      '',
+      'float hash12(vec2 p){',
+      '  vec2 q = fract(p * vec2(0.1031, 0.1030));',
+      '  q += dot(q, q.yx + 33.33);',
+      '  return fract((q.x + q.y) * q.x);',
+      '}',
+      '',
+      'float vnoise(vec2 p){',
+      '  vec2 i = floor(p);',
+      '  vec2 f = fract(p);',
+      '  vec2 u = f * f * (3.0 - 2.0 * f);',
+      '  float a = hash12(i);',
+      '  float b = hash12(i + vec2(1.0, 0.0));',
+      '  float c = hash12(i + vec2(0.0, 1.0));',
+      '  float d = hash12(i + vec2(1.0, 1.0));',
+      '  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);',
+      '}',
+      '',
+      'float fbm(vec2 p){',
+      '  float v = 0.0;',
+      '  float a = 0.5;',
+      '  for (int i = 0; i < 3; i++) {',
+      '    v += a * vnoise(p);',
+      '    p = vec2(p.x * 1.62 + p.y * 1.22, -p.x * 1.22 + p.y * 1.62) + 11.5;',
+      '    a *= 0.5;',
+      '  }',
+      '  return v;',
+      '}',
+      '',
+      'float smin(float a, float b, float k){',
+      '  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);',
+      '  return mix(b, a, h) - k * h * (1.0 - h);',
+      '}',
+      '',
+      'float sdCapsule(vec2 p, vec2 a, vec2 b, float r){',
+      '  vec2 pa = p - a, ba = b - a;',
+      '  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);',
+      '  return length(pa - ba * h) - r;',
+      '}',
+      '',
+      'vec2 n2(float t, float seed){',
+      '  return vec2(vnoise(vec2(t * 1.13, seed)), vnoise(vec2(t * 1.27 + 4.2, seed + 3.1))) - 0.5;',
+      '}',
+      '',
+      'float sdFlame(vec2 p, float t){',
+      '  vec2 c = vec2(0.0, -0.06);',
+      '  // Slow breathing: lower body bulges out as it squashes, then reaches up.',
+      '  float breath = sin(t * 2.05);',
+      '  float bulge = 1.0 + 0.11 * breath + 0.06 * uFlare;',
+      '  float squat = 1.0 - 0.09 * breath;',
+      '  vec2 q = p - c;',
+      '  float low = 1.0 - smoothstep(-0.15, 0.85, q.y);',
+      '  q.x /= mix(1.0, bulge, low);',
+      '  q.y /= mix(1.0, squat, low * 0.85);',
+      '',
+      '  // Multi-octave domain warp scrolling upward so the whole silhouette churns.',
+      '  vec2 ns = vec2(q.x * 1.85, q.y * 1.65 - t * 2.55);',
+      '  vec2 w1 = vec2(fbm(ns), fbm(ns + vec2(5.2, -t * 0.28))) - 0.5;',
+      '  ns += w1 * (0.48 + 0.22 * uFlare);',
+      '  vec2 w2 = vec2(fbm(ns * 2.15 + 8.0), fbm(ns * 2.15 + 17.0 - t * 0.12)) - 0.5;',
+      '  ns += w2 * 0.24;',
+      '  float n = fbm(ns * 1.75);',
+      '  float nFine = fbm(ns * 3.35 + vec2(3.0, t * 0.45));',
+      '',
+      '  float rx = 1.12 + 0.07 * uFlare;',
+      '  float ry = 1.08;',
+      '  float sd = length(q / vec2(rx, ry)) * min(rx, ry) - 0.94;',
+      '  // Soft side lumps, also advected by the warp so they do not orbit in place.',
+      '  vec2 b2 = vec2(-0.48, 0.06) + w1 * 0.16;',
+      '  vec2 b3 = vec2( 0.50, 0.02) + vec2(-w1.y, w1.x) * 0.16;',
+      '  sd = smin(sd, length(q - b2) - 0.58, 0.16);',
+      '  sd = smin(sd, length(q - b3) - 0.56, 0.16);',
+      '',
+      '  float hw = smoothstep(-0.20, 1.20, q.y);',
+      '  sd -= (n - 0.48) * (0.11 + 0.36 * hw * hw + 0.08 * low + 0.10 * uFlare);',
+      '  sd -= (nFine - 0.5) * (0.05 + 0.14 * hw);',
+      '  float ang = atan(q.y, q.x);',
+      '  sd -= (vnoise(vec2(ang * 1.7, q.y * 1.3 - t * 2.15)) - 0.5) * (0.07 + 0.16 * hw);',
+      '',
+      '  // Two or three tongues that grow, sway, change shape, and pinch off.',
+      '  vec2 mainTip = vec2(0.0, 1.35);',
+      '  for (int i = 0; i < 3; i++) {',
+      '    float fi = float(i);',
+      '    float spd = 0.52 + 0.16 * fi;',
+      '    float ph = fract(t * spd + fi * 0.37);',
+      '    float env = smoothstep(0.02, 0.18, ph) * (1.0 - smoothstep(0.52, 0.82, ph));',
+      '    if (i == 2) env *= smoothstep(0.35, 0.62, fbm(vec2(floor(t * spd + fi * 0.37), 21.0)));',
+      '    float len = 0.18 + (0.55 + 0.40 * (1.0 - 0.35 * fi) + 0.18 * uFlare) * env;',
+      '    vec2 sw = n2(t * (2.35 + 0.28 * fi) + fi, 14.0 + fi);',
+      '    vec2 hk = n2(t * (3.05 + 0.2 * fi) + fi * 2.0, 20.0 + fi);',
+      '    vec2 base = vec2((-0.22 + 0.22 * fi) + sw.x * 0.20, ry * 0.52);',
+      '    vec2 mid  = base + vec2(sw.x * (0.45 + 0.40 * env), len * 0.46);',
+      '    vec2 tip  = mid  + vec2(sw.x * 0.35 + hk.x * 0.85 * env, len * 0.56 - abs(hk.x) * 0.28 * env);',
+      '    if (i == 0) mainTip = tip + c;',
+      '    float tt = clamp((q.y - base.y) / max(tip.y - base.y, 0.04), 0.0, 1.0);',
+      '    float tw = mix(0.30 + 0.06 * uFlare, 0.035, pow(tt, 0.78)) * (0.45 + 0.55 * env);',
+      '    float tongue = smin(',
+      '      sdCapsule(q, base, mid, tw * 1.05),',
+      '      sdCapsule(q, mid, tip, mix(tw, 0.04, 0.7)),',
+      '      0.11);',
+      '    tongue -= (vnoise(vec2(q.x * 4.0, q.y * 3.0 - t * 2.3) + fi) - 0.5) * 0.06 * env;',
+      '    sd = smin(sd, tongue, 0.14);',
+      '  }',
+      '',
+      '  // Hanging drips at varied speeds — some linger, one stretches far.',
+      '  for (int i = 0; i < 4; i++) {',
+      '    float fi = float(i);',
+      '    vec2 dn = n2(t * (0.55 + 0.33 * fi), 30.0 + fi);',
+      '    float phase = pow(0.5 + 0.5 * sin(t * (0.70 + 0.48 * fi) + fi * 1.7), 1.45 + 0.3 * fi);',
+      '    float len = 0.10 + (0.22 + 0.20 * fi) * phase * (0.50 + 0.50 * (dn.y + 0.5));',
+      '    if (i == 1) len += 0.28 * phase;',
+      '    float dx = -0.48 + 0.32 * fi + dn.x * 0.18;',
+      '    vec2 da = vec2(dx, -ry * 0.80 * squat);',
+      '    vec2 db = da + vec2(dn.x * 0.14 * len, -len);',
+      '    float rad = mix(0.085, 0.020, phase) * (i == 2 ? 0.62 : 1.0);',
+      '    sd = smin(sd, sdCapsule(q, da, db, rad), 0.07);',
+      '  }',
+      '',
+      '  // Blobs pinch off a tongue tip, then rise, shrink and fade.',
+      '  for (int j = 0; j < 5; j++) {',
+      '    float fj = float(j);',
+      '    float life = 0.55 + 0.38 * fj;',
+      '    float cycle = t / life + fj * 0.23;',
+      '    float ph = fract(cycle);',
+      '    vec2 jn = n2(floor(cycle) * 1.7, 40.0 + fj);',
+      '    // Appear as the matching tongue retracts, then float up.',
+      '    vec2 birth = mainTip - c + vec2(jn.x * 0.30, 0.02);',
+      '    if (j > 0) birth.x += (fj - 2.0) * 0.10;',
+      '    vec2 bp = birth + vec2(jn.x * (0.35 + 0.25 * ph) + jn.y * 0.12, ph * (0.95 + 0.55 * fj));',
+      '    float br = mix(0.16, 0.02, ph) * smoothstep(0.0, 0.10, ph) * (1.0 - smoothstep(0.55, 1.0, ph));',
+      '    vec2 ep = (q - bp) / vec2(1.0 + jn.x * 0.40, 1.15 + 0.35 * ph);',
+      '    ep.x += (vnoise(ep * 3.4 + fj + t * 0.2) - 0.5) * 0.20;',
+      '    sd = min(sd, length(ep) - br);',
+      '  }',
+      '  return sd;',
+      '}',
+      '',
+      'void main(){',
+      '  vec2 screen = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);',
+      '  vec2 d = screen - uCenter;',
+      '  float ca = cos(uAngle), sa = sin(uAngle);',
+      '  vec2 r = vec2(ca * d.x + sa * d.y, -sa * d.x + ca * d.y);',
+      '  vec2 p = vec2(r.x / max(uScale.x, 0.001), -r.y / max(uScale.y, 0.001));',
+      '  p /= 102.0;',
+      '  float t = uTime;',
+      '  // uHold is a hold rate in fps (22 ~= the reference GIF). 0 = smooth time.',
+      '  float ts = (uHold > 0.5) ? floor(t * uHold + 0.001) / uHold : t;',
+      '',
+      '  float sdA = 8.0;',
+      '  if (uUseAtlas > 0.5) {',
+      '    float col = mod(uFrame, uGrid.z);',
+      '    float row = floor(uFrame / uGrid.z);',
+      '    vec2 cellP = uFacePx + vec2(p.x, -p.y) * uPx;',
+      '    if (cellP.x > 1.0 && cellP.y > 1.0 && cellP.x < uGrid.x - 1.0 && cellP.y < uGrid.y - 1.0) {',
+      '      vec2 uv = (vec2(col, row) * uGrid.xy + cellP) / uGrid.w;',
+      '      float enc = texture2D(uAtlas, uv).r;',
+      '      sdA = (enc > 0.98) ? 8.0 : (enc - 0.5) * 2.0 * uSdfRange / max(uPx, 0.001);',
+      '    }',
+      '  }',
+      '',
+      '  vec3 cream = vec3(1.000, 1.000, 0.420);',   // 255,255,107
+      '  vec3 gold  = vec3(0.996, 0.698, 0.173);',   // 254,178,44
+      '  vec3 orange= vec3(0.808, 0.424, 0.129);',   // 206,108,33
+      '  vec3 deep  = vec3(0.498, 0.216, 0.118);',   // 127,55,30
+      '  vec3 shade = vec3(0.235, 0.078, 0.047);',   // dark band behind the face
+      '  vec3 haloC = vec3(0.90,  0.42,  0.10);',    // soft orange glow
+      '  vec3 glowC = vec3(0.35,  0.10,  0.05);',
+      '  vec3 hazeC = vec3(0.188, 0.063, 0.063);',   // maroon-brown haze
+      '  vec3 ringC = vec3(0.45,  0.16,  0.07);',
+      '  vec3 smokeC= vec3(0.30,  0.18,  0.14);',
+      '',
+      '  float dist = length(p);',
+      '  float sd = (uUseAtlas > 0.5) ? sdA : sdFlame(p, ts);',
+      '  // Pixel-sized AA so edges stay smooth at 2x DPR without jaggies.',
+      '  float aa = 1.35 / max(uScale.y * 102.0, 1.0);',
+      '  float fire = smoothstep(aa, -aa, sd);',
+      '',
+      '  // Posterized cream / gold / orange bands. Hot patches scroll with the boil.',
+      '  float nH = vnoise(vec2(p.x * 0.62, p.y * 0.55 - ts * 0.62));',
+      '  float nH2= vnoise(vec2(p.x * 1.05 + 5.3, p.y * 0.90 - ts * 0.28));',
+      '  float boil = nH * 0.80 + nH2 * 0.20;',
+      '  float depth = clamp(-sd * 1.20, 0.0, 1.0);',
+      '  float band = mix(0.10, 0.88, boil) * mix(0.40, 1.0, depth);',
+      '  float toGold  = smoothstep(0.18, 0.26, band);',
+      '  float toCream = smoothstep(0.48, 0.56, band);',
+      '  vec3 col = mix(orange, gold, toGold);',
+      '  col = mix(col, cream, toCream);',
+      '  float rimT = smoothstep(-0.14, -0.02, sd);',
+      '  col = mix(col, orange, rimT * 0.95);',
+      '  col = mix(col, deep, rimT * smoothstep(0.02, 0.12, sd + 0.04) * 0.22);',
+      '  // Optional dark band behind the white face so it stays readable on cream.',
+      '  float core = 1.0 - smoothstep(0.16, 0.72, length(p - vec2(0.0, 0.03)));',
+      '  col = mix(col, shade, core * uFaceShade);',
+      '',
+      '  // Soft orange halo, then maroon-brown haze like the color reference.',
+      '  float close = exp(-max(sd, 0.0) * 5.8) * (0.95 + 0.15 * uFlare);',
+      '  float midg  = exp(-max(sd, 0.0) * 1.7) * 0.50;',
+      '  float hazeA = exp(-dist * 0.42) * 0.85;',
+      '  close *= 1.0 - fire * 0.92;',
+      '  midg  *= 1.0 - fire * 0.85;',
+      '  hazeA *= 1.0 - fire * 0.70;',
+      '',
+      '  // Faint broken ring, not a clock face.',
+      '  float aang = atan(p.y + 0.06, p.x);',
+      '  float ringR = 1.78 + 0.05 * vnoise(vec2(aang * 1.8, ts * 0.35));',
+      '  float ring = abs(length(p - vec2(0.0, -0.06)) - ringR);',
+      '  float gaps = 0.55 + 0.45 * vnoise(vec2(aang * 1.2, 8.0 + ts * 0.2));',
+      '  float ringA = exp(-ring * ring * 220.0) * 0.38 * gaps;',
+      '  ringA += exp(-ring * ring * 55.0) * 0.10;',
+      '',
+      '  // Irregular smoke puffs above the crown.',
+      '  float smoke = 0.0;',
+      '  for (int k = 0; k < 3; k++) {',
+      '    float fk = float(k);',
+      '    float life = 1.55 + 0.4 * fk;',
+      '    float cycle = t / life + fk * 0.31;',
+      '    float ph = fract(cycle);',
+      '    vec2 kn = n2(floor(cycle) * 0.9, 60.0 + fk);',
+      '    vec2 sp = vec2(kn.x * 0.75, 1.40 + ph * 1.45);',
+      '    float sr = 0.22 + 0.30 * ph + 0.05 * fk;',
+      '    float sv = smoothstep(0.0, 0.15, ph) * (1.0 - smoothstep(0.55, 1.0, ph));',
+      '    vec2 sh = (p - sp) / vec2(1.0 + ph * 0.7, 1.25);',
+      '    sh.x += (vnoise(sh * 3.0 + ts) - 0.5) * 0.45;',
+      '    smoke += sv * (1.0 - smoothstep(0.4, 1.2, length(sh) / sr)) * 0.45;',
+      '  }',
+      '  smoke *= 1.0 - fire;',
+      '',
+      '  vec3 rgb = hazeC * hazeA + haloC * close + glowC * midg + ringC * ringA + smokeC * smoke;',
+      '  rgb = mix(rgb, col, fire);',
+      '  gl_FragColor = vec4(rgb, 1.0);',
+      '}'
+    ].join('\n');
+
+    function compileShader(type, src) {
+      var sh = gl.createShader(type);
+      gl.shaderSource(sh, src);
+      gl.compileShader(sh);
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+        console.warn('Echo flame shader', gl.getShaderInfoLog(sh));
+        gl.deleteShader(sh);
+        return null;
+      }
+      return sh;
+    }
+
+    function initFlameGL() {
+      if (!flameCanvas) return false;
+      var opts = {
+        alpha: false,
+        antialias: false,
+        depth: false,
+        stencil: false,
+        premultipliedAlpha: true,
+        preserveDrawingBuffer: false,
+        powerPreference: 'high-performance'
+      };
+      gl = flameCanvas.getContext('webgl', opts) || flameCanvas.getContext('experimental-webgl', opts);
+      if (!gl) return false;
+      var vs = compileShader(gl.VERTEX_SHADER, FLAME_VERT);
+      var fs = compileShader(gl.FRAGMENT_SHADER, FLAME_FRAG);
+      if (!vs || !fs) return false;
+      glProg = gl.createProgram();
+      gl.attachShader(glProg, vs);
+      gl.attachShader(glProg, fs);
+      gl.bindAttribLocation(glProg, 0, 'aPos');
+      gl.linkProgram(glProg);
+      if (!gl.getProgramParameter(glProg, gl.LINK_STATUS)) {
+        console.warn('Echo flame program', gl.getProgramInfoLog(glProg));
+        return false;
+      }
+      glBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        -1, -1, 1, -1, -1, 1, 1, 1
+      ]), gl.STATIC_DRAW);
+      glUni.uRes = gl.getUniformLocation(glProg, 'uRes');
+      glUni.uCenter = gl.getUniformLocation(glProg, 'uCenter');
+      glUni.uScale = gl.getUniformLocation(glProg, 'uScale');
+      glUni.uAngle = gl.getUniformLocation(glProg, 'uAngle');
+      glUni.uTime = gl.getUniformLocation(glProg, 'uTime');
+      glUni.uFlare = gl.getUniformLocation(glProg, 'uFlare');
+      glUni.uHold = gl.getUniformLocation(glProg, 'uHold');
+      glUni.uAtlas = gl.getUniformLocation(glProg, 'uAtlas');
+      glUni.uUseAtlas = gl.getUniformLocation(glProg, 'uUseAtlas');
+      glUni.uFrame = gl.getUniformLocation(glProg, 'uFrame');
+      glUni.uGrid = gl.getUniformLocation(glProg, 'uGrid');
+      glUni.uFacePx = gl.getUniformLocation(glProg, 'uFacePx');
+      glUni.uPx = gl.getUniformLocation(glProg, 'uPx');
+      glUni.uSdfRange = gl.getUniformLocation(glProg, 'uSdfRange');
+      glUni.uFaceShade = gl.getUniformLocation(glProg, 'uFaceShade');
+      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.BLEND);
+      return true;
+    }
+
+    function resizeFlameGL() {
+      if (!gl || !flameCanvas) return;
+      var fdpr = Math.min(window.devicePixelRatio || 1, 2);
+      var dw = Math.max(1, Math.round(W * fdpr));
+      var dh = Math.max(1, Math.round(H * fdpr));
+      if (flameCanvas.width !== dw || flameCanvas.height !== dh) {
+        flameCanvas.width = dw;
+        flameCanvas.height = dh;
+      }
+      flameCanvas.style.width = W + 'px';
+      flameCanvas.style.height = H + 'px';
+      gl.viewport(0, 0, dw, dh);
+    }
+
+    function renderFlameGL(now, xf) {
+      if (!gl || !glProg) return;
+      gl.viewport(0, 0, flameCanvas.width, flameCanvas.height);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.useProgram(glProg);
+      gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      var fdpr = flameCanvas.width / Math.max(W, 1);
+      gl.uniform2f(glUni.uRes, flameCanvas.width, flameCanvas.height);
+      gl.uniform2f(glUni.uCenter, xf.x * fdpr, xf.y * fdpr);
+      gl.uniform2f(glUni.uScale, xf.scx * fdpr, xf.scy * fdpr);
+      gl.uniform1f(glUni.uAngle, xf.ang);
+      gl.uniform1f(glUni.uTime, now);
+      gl.uniform1f(glUni.uFlare, flare);
+      gl.uniform1f(glUni.uHold, holdFps);
+      gl.uniform1f(glUni.uUseAtlas, flipReady ? 1 : 0);
+      if (flipReady && flipTex) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, flipTex);
+        gl.uniform1i(glUni.uAtlas, 0);
+        gl.uniform1f(glUni.uFrame, flipFrameAt(now));
+        gl.uniform4f(glUni.uGrid, flipMeta.cellW, flipMeta.cellH, flipMeta.cols, flipMeta.atlas);
+        gl.uniform2f(glUni.uFacePx, flipMeta.faceX, flipMeta.faceY);
+        gl.uniform1f(glUni.uPx, flipMeta.bodyHalf / 1.08);
+        gl.uniform1f(glUni.uSdfRange, flipMeta.sdfRange);
+        gl.uniform1f(glUni.uFaceShade, faceShadeAmt);
+      } else {
+        gl.uniform1f(glUni.uFaceShade, faceShadeAmt);
+      }
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
     function resize() {
       W = window.innerWidth;
       H = window.innerHeight;
-      dpr = Math.min(window.devicePixelRatio || 1, 3);
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = Math.round(W * dpr);
       canvas.height = Math.round(H * dpr);
       canvas.style.width = W + 'px';
@@ -385,10 +773,20 @@
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       readSafe();
       S = clamp(Math.min(W, H) / 430, 0.72, 1.55);
-      if (!pos.x && !pos.y) {
-        var r = playable();
-        pos.x = pos.tx = (r.x0 + r.x1) / 2;
-        pos.y = pos.ty = (r.y0 + r.y1) / 2;
+      placeCenter(true);
+      if (glOk) resizeFlameGL();
+      else if (flame2d) resizeFlame2D();
+    }
+
+    function placeCenter(init) {
+      var barH = (barEl && !hideUi) ? barEl.getBoundingClientRect().height : 0;
+      rest.x = W / 2;
+      rest.y = safe.top + (H - safe.top - barH) / 2;
+      if (init || (!pos.x && !pos.y)) {
+        pos.x = pos.tx = rest.x;
+        pos.y = pos.ty = rest.y;
+        pos.vx = 0;
+        pos.vy = 0;
       }
     }
 
@@ -399,7 +797,7 @@
         x = rand(r.x0, r.x1);
         y = rand(r.y0, r.y1);
         tries++;
-      } while (Math.hypot(x - pos.x, y - pos.y) < 90 * S && tries < 8);
+      } while (Math.hypot(x - pos.x, y - pos.y) < 80 * S && tries < 8);
       return { x: x, y: y };
     }
 
@@ -418,12 +816,12 @@
 
     function holdRange(name) {
       var h = HOLD[name] || HOLD._default;
-      return rand(h[0], h[1]);
+      return h;
     }
 
     function pickAutoExpression() {
       var pool = EXPRESSION_NAMES.filter(function (n) { return n !== exprName; });
-      return pool[(Math.random() * pool.length) | 0];
+      return pool[Math.floor(Math.random() * pool.length)];
     }
 
     function setAuto(on) {
@@ -431,7 +829,7 @@
       autoBtn.setAttribute('aria-pressed', autoOn ? 'true' : 'false');
       if (autoOn) {
         autoTimer = 0;
-        autoHold = 0.4;
+        autoHold = rand(holdRange(exprName)[0], holdRange(exprName)[1]);
       }
     }
 
@@ -447,51 +845,54 @@
         var b = document.createElement('button');
         b.type = 'button';
         b.className = 'pill';
+        b.textContent = LABELS[name];
         b.setAttribute('data-expr', name);
-        b.textContent = LABELS[name] || name;
         b.addEventListener('click', function (e) {
-          e.stopPropagation();
+          e.preventDefault();
           setExpressionInternal(name, false);
         });
         pillsEl.appendChild(b);
       });
       autoBtn.addEventListener('click', function (e) {
-        e.stopPropagation();
+        e.preventDefault();
         setAuto(!autoOn);
       });
-      syncPill();
-      autoBtn.setAttribute('aria-pressed', autoOn ? 'true' : 'false');
     }
 
     function startBlink(now, isSecond) {
       blinkState = 'closing';
-      blinkUntil = now + 0.055;
+      blinkUntil = now + 0.045;
       doublePending = !isSecond && Math.random() < 0.18;
     }
 
+    function eyesAreOpenStyle() {
+      // Don't blink fully closed eyes / X / flats as hard.
+      return (cur.lCircle + cur.rCircle + cur.lCaret + cur.rCaret + cur.lSlit + cur.rSlit) > 0.4;
+    }
+
     function updateBlink(dt, now) {
-      if (exprName === 'sleeping' || cur.zzz > 0.7) {
-        blink = 0;
-        return;
-      }
       if (blinkState === 'open') {
+        if (now >= blinkUntil) {
+          if (eyesAreOpenStyle() && now > pokeUntil) startBlink(now, false);
+          else blinkUntil = now + rand(0.6, 2.2);
+        }
         blink = expApproach(blink, 0, 28, dt);
-        if (now >= blinkUntil) startBlink(now, false);
       } else if (blinkState === 'closing') {
-        blink = expApproach(blink, 1, 32, dt);
+        blink = expApproach(blink, 1, 36, dt);
         if (now >= blinkUntil) {
           blinkState = 'opening';
-          blinkUntil = now + 0.08;
+          blinkUntil = now + 0.07;
         }
-      } else {
-        blink = expApproach(blink, 0, 26, dt);
-        if (now >= blinkUntil) {
+      } else if (blinkState === 'opening') {
+        blink = expApproach(blink, 0, 28, dt);
+        if (now >= blinkUntil && blink < 0.12) {
           if (doublePending) {
             doublePending = false;
             startBlink(now, true);
           } else {
             blinkState = 'open';
-            blinkUntil = now + rand(2.1, 5.4);
+            blink = 0;
+            blinkUntil = now + rand(1.8, 4.6);
           }
         }
       }
@@ -501,7 +902,6 @@
       if (follow) {
         var dx = follow.x - pos.x;
         var dy = follow.y - pos.y;
-        var m = Math.hypot(dx, dy) || 1;
         look.tx = clamp(dx / (140 * S), -1, 1);
         look.ty = clamp(dy / (140 * S), -1, 1);
       } else if (now >= look.until) {
@@ -514,13 +914,6 @@
         }
         look.until = now + rand(1.2, 3.4);
       }
-      if (phase === 'move' && !follow) {
-        var sp = Math.hypot(pos.vx, pos.vy);
-        if (sp > 20) {
-          look.tx = clamp(look.tx * 0.7 + (pos.vx / 180) * 0.8, -1, 1);
-          look.ty = clamp(look.ty * 0.7 + (pos.vy / 180) * 0.8, -1, 1);
-        }
-      }
       var ltx = clamp(look.tx + cur.lookBiasX, -1.15, 1.15);
       var lty = clamp(look.ty + cur.lookBiasY, -1.15, 1.15);
       look.x = expApproach(look.x, ltx, 6.5, dt);
@@ -528,71 +921,22 @@
     }
 
     function updateMotion(dt, now) {
-      if (stillMode) {
-        var r0 = playable();
-        pos.tx = (r0.x0 + r0.x1) / 2;
-        pos.ty = (r0.y0 + r0.y1) / 2;
-      } else if (follow) {
-        phase = 'follow';
-        pos.tx = follow.x;
-        pos.ty = follow.y;
-        var bounds = playable();
-        pos.tx = clamp(pos.tx, bounds.x0, bounds.x1);
-        pos.ty = clamp(pos.ty, bounds.y0, bounds.y1);
-      } else if (phase === 'pause') {
-        pos.tx = pos.x;
-        pos.ty = pos.y;
-        if (now >= phaseUntil) {
-          nextTarget = pickWanderTarget();
-          var ang = Math.atan2(nextTarget.y - pos.y, nextTarget.x - pos.x);
-          pos.tx = pos.x - Math.cos(ang) * 16 * S;
-          pos.ty = pos.y - Math.sin(ang) * 16 * S;
-          phase = 'anticipate';
-          phaseUntil = now + 0.13;
-          squash = 0.12;
-        }
-      } else if (phase === 'anticipate') {
-        if (now >= phaseUntil) {
-          pos.tx = nextTarget.x;
-          pos.ty = nextTarget.y;
-          phase = 'move';
-        }
-      } else if (phase === 'move' || phase === 'follow') {
-        if (phase === 'move') {
-          var dist = Math.hypot(pos.tx - pos.x, pos.ty - pos.y);
-          var spd = Math.hypot(pos.vx, pos.vy);
-          if (dist < 14 * S && spd < 28) {
-            phase = 'pause';
-            phaseUntil = now + rand(0.55, 2.1);
-            pos.tx = pos.x;
-            pos.ty = pos.y;
-            squash = 0.1;
-          }
-        } else {
-          phase = 'pause';
-          phaseUntil = now + rand(0.4, 1.0);
-        }
-      }
-
-      var omega = follow ? 7.2 : (phase === 'anticipate' ? 8.5 : 3.4);
-      var zeta = follow ? 0.9 : 0.88;
+      placeCenter(false);
+      // Stay in the center. Subtle bob / breathe only — no wandering.
+      var bob = stillMode ? 0 : (Math.sin(now * 2.15) * 4.0 * S + Math.sin(now * 3.6 + 0.4) * 1.6 * S);
+      var breathe = stillMode ? 0 : 0.016 * Math.sin(now * 2.15);
+      pos.tx = rest.x;
+      pos.ty = rest.y + bob;
+      var omega = 9.2, zeta = 0.93;
       var ax = omega * omega * (pos.tx - pos.x) - 2 * zeta * omega * pos.vx;
       var ay = omega * omega * (pos.ty - pos.y) - 2 * zeta * omega * pos.vy;
       pos.vx += ax * dt;
       pos.vy += ay * dt;
       pos.x += pos.vx * dt;
       pos.y += pos.vy * dt;
-
-      var b = playable();
-      if (pos.x < b.x0) { pos.x = b.x0; if (pos.vx < 0) pos.vx *= -0.25; }
-      if (pos.x > b.x1) { pos.x = b.x1; if (pos.vx > 0) pos.vx *= -0.25; }
-      if (pos.y < b.y0) { pos.y = b.y0; if (pos.vy < 0) pos.vy *= -0.25; }
-      if (pos.y > b.y1) { pos.y = b.y1; if (pos.vy > 0) pos.vy *= -0.25; }
-
-      var speed = Math.hypot(pos.vx, pos.vy);
-      var leanT = (speed > 8) ? Math.atan2(pos.vy, pos.vx) * clamp(speed / 260, 0, 0.22) : 0;
-      lean = expApproach(lean, leanT, 5, dt);
-      squash = expApproach(squash, 0, 8, dt);
+      lean = expApproach(lean, 0.018 * Math.sin(now * 2.7 + flickerN), 6, dt);
+      squash = expApproach(squash, breathe, 8, dt);
+      flare = Math.max(0, flare - dt * 2.4);
     }
 
     function approachParams(dt) {
@@ -606,522 +950,941 @@
       return talkHeld || exprName === 'talking';
     }
 
-    function spawnTear(now) {
-      var side = Math.random() < 0.7 ? -1 : 1;
-      tears.push({
-        side: side,
-        attached: true,
-        grow: 0,
-        x: 0, y: 0,
-        vx: rand(-8, 8) * S,
-        vy: 0,
-        born: now,
-        life: rand(0.85, 1.25)
-      });
-    }
-
-    function spawnZzz() {
-      zzzs.push({
-        x: rand(18, 36) * S,
-        y: rand(-36, -20) * S,
-        vx: rand(8, 18) * S,
-        vy: rand(-28, -16) * S,
-        age: 0,
-        life: rand(1.4, 2.1),
-        ch: Math.random() < 0.45 ? 'Z' : 'z',
-        rot: rand(-0.2, 0.4)
-      });
-    }
-
-    function updateEffects(dt, now) {
-      if (cur.tear > 0.4 && now >= nextTear) {
-        spawnTear(now);
-        nextTear = now + rand(0.55, 1.05);
-      }
-      if (cur.tear < 0.2) nextTear = now + 0.2;
-
-      var i, t;
-      for (i = tears.length - 1; i >= 0; i--) {
-        t = tears[i];
-        if (t.attached) {
-          t.grow = Math.min(1, t.grow + dt * 3.2);
-          if (t.grow >= 1 && now - t.born > 0.22) {
-            t.attached = false;
-            t.vy = 20 * S;
-          }
-        } else {
-          t.vy += 520 * S * dt;
-          t.x += t.vx * dt;
-          t.y += t.vy * dt;
-          if (now - t.born > t.life + 0.35) tears.splice(i, 1);
-        }
-      }
-
-      if (cur.zzz > 0.4 && now >= nextZzz) {
-        spawnZzz();
-        nextZzz = now + rand(0.55, 0.9);
-      }
-      if (cur.zzz < 0.2) nextZzz = now + 0.15;
-      for (i = zzzs.length - 1; i >= 0; i--) {
-        t = zzzs[i];
-        t.age += dt;
-        t.x += t.vx * dt;
-        t.y += t.vy * dt;
-        if (t.age > t.life) zzzs.splice(i, 1);
-      }
-    }
-
     function updateAuto(dt) {
       if (!autoOn) return;
       autoTimer += dt;
-      if (autoTimer >= autoHold && pokeUntil <= time) {
-        setExpressionInternal(pickAutoExpression(), true);
+      if (autoTimer >= autoHold) {
         autoTimer = 0;
-        autoHold = holdRange(exprName);
+        var next = pickAutoExpression();
+        setExpressionInternal(next, true);
+        autoHold = rand(holdRange(next)[0], holdRange(next)[1]);
       }
     }
 
-    function faceRadius() {
-      return 78 * S;
-    }
-
-    /* ---------- drawing ---------- */
-
-    function heartPoint(t, rx, ry) {
-      var a = t * Math.PI * 2;
-      var hx = 16 * Math.pow(Math.sin(a), 3);
-      var hy = -(13 * Math.cos(a) - 5 * Math.cos(2 * a) - 2 * Math.cos(3 * a) - Math.cos(4 * a));
-      return { x: (hx / 16) * rx, y: (hy / 16) * ry };
-    }
-
-    function ellipsePoint(t, rx, ry) {
-      var a = t * Math.PI * 2 - Math.PI / 2;
-      return { x: Math.cos(a) * rx, y: Math.sin(a) * ry };
-    }
-
-    function arcSausagePoint(t, rx, ry, width) {
-      var Ncap = 0.18;
-      var half = width;
-      var start = Math.PI * 0.82;
-      var end = Math.PI * 0.18 + Math.PI * 2;
-      var span = end - start;
-      if (t < Ncap) {
-        var u = t / Ncap;
-        var ang = start;
-        var cx = Math.cos(start) * rx;
-        var cy = Math.sin(start) * ry;
-        var nx = Math.cos(start);
-        var ny = Math.sin(start);
-        var a0 = Math.atan2(ny, nx) + Math.PI / 2;
-        var a = a0 + u * Math.PI;
-        return { x: cx + Math.cos(a) * half, y: cy + Math.sin(a) * half };
-      }
-      if (t > 1 - Ncap) {
-        var u2 = (t - (1 - Ncap)) / Ncap;
-        var cx2 = Math.cos(end) * rx;
-        var cy2 = Math.sin(end) * ry;
-        var nx2 = Math.cos(end);
-        var ny2 = Math.sin(end);
-        var a1 = Math.atan2(ny2, nx2) - Math.PI / 2;
-        var a2 = a1 + u2 * Math.PI;
-        return { x: cx2 + Math.cos(a2) * half, y: cy2 + Math.sin(a2) * half };
-      }
-      var mid = (t - Ncap) / (1 - 2 * Ncap);
-      var outward = mid < 0.5;
-      var s = outward ? mid * 2 : (mid - 0.5) * 2;
-      var ang2 = outward ? start + s * span : end - s * span;
-      var px = Math.cos(ang2) * rx;
-      var py = Math.sin(ang2) * ry;
-      var sign = outward ? 1 : -1;
-      var nx3 = Math.cos(ang2);
-      var ny3 = Math.sin(ang2);
-      return { x: px + nx3 * half * sign, y: py + ny3 * half * sign };
-    }
-
-    function lerpPt(a, b, t) {
-      return { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) };
-    }
-
-    function drawEye(ctx, ox, oy, rx, ry, rot, open, arc, heart) {
-      var o = clamp(open, 0, 1);
-      var ryO = Math.max(1.15, ry * Math.max(o, 0.04));
-      ctx.save();
-      ctx.translate(ox, oy);
-      ctx.rotate(rot);
-
-      if (heart > 0.01) {
-        var n = 28;
-        ctx.beginPath();
-        for (var i = 0; i <= n; i++) {
-          var tt = i / n;
-          var pE = ellipsePoint(tt, rx, ryO);
-          var pH = heartPoint(tt, rx * 1.08, ryO * 1.18);
-          var p = lerpPt(pE, pH, clamp(heart, 0, 1));
-          if (i === 0) ctx.moveTo(p.x, p.y);
-          else ctx.lineTo(p.x, p.y);
-        }
-        ctx.closePath();
-        var pink = clamp((heart - 0.15) / 0.85, 0, 1);
-        ctx.fillStyle = 'rgb(255,' + Math.round(lerp(255, 150, pink)) + ',' + Math.round(lerp(255, 175, pink)) + ')';
-        ctx.fill();
-        ctx.restore();
-        return;
-      }
-
-      if (arc > 0.01) {
-        var tArc = clamp(arc, 0, 1);
-        var lw = lerp(ryO * 1.85, 6.4, tArc);
-        var span = lerp(0.08, rx * 0.98, Math.pow(tArc, 0.55));
-        var yEnd = lerp(0, 2.4, tArc);
-        var yCtrl = lerp(0, -Math.max(7.2, ry * 0.95), tArc);
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = lw;
-        ctx.beginPath();
-        ctx.moveTo(-span, yEnd);
-        ctx.quadraticCurveTo(0, yCtrl, span, yEnd);
-        ctx.stroke();
-        ctx.restore();
-        return;
-      }
-
-      if (o < 0.08) {
-        ctx.beginPath();
-        ctx.ellipse(0, 0, rx, Math.max(1.55, ry * 0.18), 0, 0, Math.PI * 2);
-        ctx.fillStyle = '#fff';
-        ctx.fill();
-        ctx.restore();
-        return;
-      }
-
-      ctx.beginPath();
-      ctx.ellipse(0, 0, rx, ryO, 0, 0, Math.PI * 2);
-      ctx.fillStyle = '#fff';
-      ctx.fill();
-      ctx.restore();
-    }
-
-    function quadPt(p0x, p0y, p1x, p1y, p2x, p2y, t) {
-      var u = 1 - t;
+    function spriteToWorld(sx, sy, xf) {
+      // xf: {x, y, scx, scy, ang} applied around FACE
+      var dx = sx - FACE_CX;
+      var dy = sy - FACE_CY;
+      var ca = Math.cos(xf.ang), sa = Math.sin(xf.ang);
+      var rx = dx * xf.scx;
+      var ry = dy * xf.scy;
       return {
-        x: u * u * p0x + 2 * u * t * p1x + t * t * p2x,
-        y: u * u * p0y + 2 * u * t * p1y + t * t * p2y
-      };
-    }
-    function quadTan(p0x, p0y, p1x, p1y, p2x, p2y, t) {
-      return {
-        x: 2 * (1 - t) * (p1x - p0x) + 2 * t * (p2x - p1x),
-        y: 2 * (1 - t) * (p1y - p0y) + 2 * t * (p2y - p1y)
+        x: xf.x + rx * ca - ry * sa,
+        y: xf.y + rx * sa + ry * ca
       };
     }
 
-    function drawMouth(ctx, p, tNow) {
-      var w = p.mouthW;
-      var thick = p.mouthThick;
-      var open = clamp(p.mouthOpen, 0, 1);
-      var curve = p.mouthCurve;
-      var smirk = p.mouthSmirk;
-      var wob = p.mouthWobble;
-      var half0 = thick / 2;
-      var half = half0 + open * Math.max(w, 24) * 0.42;
-      if (talkingNow()) {
-        var osc = 0.5 + 0.42 * Math.sin(tNow * 10.4) + 0.1 * Math.sin(tNow * 18.2);
-        var talkOpen = 0.1 + osc * 0.62;
-        if (exprName !== 'surprised' && exprName !== 'shocked' && exprName !== 'sleepy') {
-          open = Math.max(open * 0.25, talkOpen);
-          half = half0 + open * Math.max(w, 28) * 0.38;
-        }
+    function currentXF() {
+      var sc = bodyScale();
+      var flickX = 1;
+      var flickY = 1;
+      if (!colorReady) {
+        flickX = 1 + 0.008 * Math.sin(time * 15.4) + 0.005 * Math.sin(time * 27.0 + flickerN);
+        flickY = 1 + 0.014 * Math.sin(time * 12.8 + 0.7) + 0.007 * Math.sin(time * 21.0 + 1.4);
+      }
+      return {
+        x: pos.x,
+        y: pos.y,
+        scx: sc * (1 + squash * 0.45) * flickX,
+        scy: sc * (1 - squash * 0.32) * flickY,
+        ang: lean
+      };
+    }
+
+    function n1(t, s) {
+      return Math.sin(t + s) * 0.54 + Math.sin(t * 1.93 + s * 1.7) * 0.31 + Math.sin(t * 3.27 + s * 2.4) * 0.15;
+    }
+
+    function spawnEmber(now, xf, sx, sy, extra) {
+      sx = sx != null ? sx : rand(SOLID_L + 16, SOLID_R - 16);
+      sy = sy != null ? sy : rand(TIP_Y + 10, FACE_CY);
+      var p = spriteToWorld(sx, sy, xf);
+      embers.push({
+        x: p.x, y: p.y,
+        vx: rand(-22, 22) * S,
+        vy: rand(-70, -28) * S,
+        r: rand(1.0, 2.6) * S,
+        born: now,
+        life: rand(0.4, 1.05),
+        hue: Math.random()
+      });
+      if (extra) embers[embers.length - 1].vy *= 1.25;
+    }
+
+    function spawnDrop(now, xf) {
+      var src = DRIPS[Math.random() < 0.4 ? 0 : 1];
+      drops.push({
+        sx: src.x + rand(-4, 4),
+        sy: src.y + rand(-2, 3),
+        attached: 1,
+        stretch: rand(8, 16),
+        maxStretch: rand(28, 58),
+        vx: 0, vy: 0,
+        x: 0, y: 0,
+        r: rand(1.8, 3.0),
+        born: now,
+        life: rand(0.7, 1.25)
+      });
+    }
+
+    function spawnSmoke(now, xf) {
+      var p = spriteToWorld(TIP_X + rand(-22, 26), TIP_Y + rand(-10, 36), xf);
+      smokes.push({
+        x: p.x, y: p.y,
+        vx: rand(-10, 16) * S,
+        vy: rand(-28, -10) * S,
+        r: rand(14, 30) * S,
+        born: now,
+        life: rand(1.3, 2.6)
+      });
+    }
+
+    function spawnTongue(now, kind) {
+      var side = kind === 'left' ? -1 : (kind === 'right' ? 1 : (Math.random() < 0.5 ? -1 : 1));
+      var fromShoulder = kind === 'left' || kind === 'right' || Math.random() < 0.28;
+      var baseX = fromShoulder ? (BULB_CX + side * rand(40, 78)) : (TIP_X + rand(-16, 16));
+      var baseY = fromShoulder ? (NECK_Y + rand(-10, 36)) : (TIP_Y + rand(6, 28));
+      tongues.push({
+        born: now,
+        life: rand(0.16, 0.42),
+        baseX: baseX,
+        baseY: baseY,
+        side: side,
+        maxLen: rand(36, 86) + flare * 28,
+        width: rand(5, 11),
+        curl: rand(0.6, 1.4) * side,
+        seed: rand(0, 20),
+        split: Math.random() < 0.55,
+        didSplit: false,
+        hot: Math.random() < 0.4
+      });
+    }
+
+    function spawnBit(now, xf, sx, sy, vx, vy) {
+      var p = spriteToWorld(sx, sy, xf);
+      bits.push({
+        x: p.x, y: p.y,
+        vx: (vx != null ? vx : rand(-16, 16)) * S,
+        vy: (vy != null ? vy : rand(-50, -18)) * S,
+        r: rand(2.2, 5.5),
+        rot: rand(0, 6),
+        rv: rand(-4, 4),
+        born: now,
+        life: rand(0.22, 0.55),
+        tall: rand(1.3, 2.2)
+      });
+    }
+
+    function updateParticles(dt, now, xf) {
+      if (now >= nextEmber) {
+        spawnEmber(now, xf);
+        if (Math.random() < 0.55) spawnEmber(now, xf);
+        if (flare > 0.2) spawnEmber(now, xf, TIP_X, TIP_Y, true);
+        nextEmber = now + rand(0.04, 0.11);
+      }
+      if (now >= nextDrop) {
+        spawnDrop(now, xf);
+        nextDrop = now + rand(0.28, 0.85);
+      }
+      if (!glOk && now >= nextSmoke) {
+        spawnSmoke(now, xf);
+        nextSmoke = now + rand(0.18, 0.48);
+      }
+      if (now >= nextTongue) {
+        var k = Math.random();
+        spawnTongue(now, k < 0.22 ? 'left' : (k < 0.44 ? 'right' : 'crown'));
+        if (Math.random() < 0.45 + flare * 0.4) spawnTongue(now, 'crown');
+        nextTongue = now + rand(0.07, 0.16);
       }
 
-      var phaseW = tNow * 9.5;
-      var yL = smirk * 5 * S + (wob ? Math.sin(phaseW) * wob * 3.2 * S : 0);
-      var yR = -smirk * 5 * S + (wob ? Math.sin(phaseW + 2.1) * wob * 3.2 * S : 0);
-      var cY = curve * S + (wob ? Math.sin(phaseW + 1.05) * wob * 5 * S : 0);
-      var cX = smirk * 4 * S;
-
-      var x0 = -w / 2, x2 = w / 2;
-      var hole = clamp(open, 0, 1);
-
-      ctx.save();
-      ctx.translate(p.mouthX, p.mouthY);
-      ctx.fillStyle = '#fff';
-
-      if (Math.abs(curve) < 0.35 && Math.abs(smirk) < 0.05 && wob < 0.05) {
-        var rx = Math.max(half, w / 2);
-        var ry = half;
-        if (w > 2) rx = w / 2 + half0 * (1 - hole * 0.15);
-        ctx.beginPath();
-        ctx.ellipse(0, 0, Math.max(rx, 1.5), Math.max(ry, 1.5), 0, 0, Math.PI * 2);
-        if (hole > 0.08) {
-          var irx = rx * hole * 0.72;
-          var iry = ry * hole * 0.72;
-          if (irx > 1.2 && iry > 1.2) {
-            ctx.ellipse(0, 0, irx, iry, 0, 0, Math.PI * 2);
-            ctx.fill('evenodd');
-          } else {
-            ctx.fill();
+      var i;
+      for (i = tongues.length - 1; i >= 0; i--) {
+        var tg = tongues[i];
+        var u = (now - tg.born) / tg.life;
+        if (u >= 1) { tongues.splice(i, 1); continue; }
+        if (tg.split && !tg.didSplit && u > 0.48) {
+          tg.didSplit = true;
+          var len = tg.maxLen * (u < 0.45 ? u / 0.45 : (1 - u) / 0.55);
+          var tipX = tg.baseX + tg.curl * 22 * n1(now * 9 + tg.seed, 2) + tg.side * len * 0.28;
+          var tipY = tg.baseY - len;
+          spawnBit(now, xf, tipX, tipY, tg.side * 28, -60);
+          if (Math.random() < 0.6) spawnEmber(now, xf, tipX, tipY, true);
+        }
+      }
+      for (i = embers.length - 1; i >= 0; i--) {
+        var e = embers[i];
+        e.vy -= 22 * S * dt;
+        e.vx += n1(now * 8 + i, 3) * 18 * S * dt;
+        e.x += e.vx * dt;
+        e.y += e.vy * dt;
+        e.vx *= (1 - 0.55 * dt);
+        if (now - e.born > e.life) embers.splice(i, 1);
+      }
+      for (i = drops.length - 1; i >= 0; i--) {
+        var d = drops[i];
+        if (d.attached) {
+          d.stretch += (38 + flare * 20) * dt * 60 / 4;
+          if (d.stretch >= d.maxStretch || now - d.born > d.life * 0.55) {
+            d.attached = 0;
+            var pw = spriteToWorld(d.sx, d.sy + d.stretch, xf);
+            d.x = pw.x; d.y = pw.y;
+            d.vy = 30 * S;
+            d.vx = rand(-8, 8) * S;
           }
         } else {
-          ctx.fill();
+          d.vy += 260 * S * dt;
+          d.x += d.vx * dt;
+          d.y += d.vy * dt;
         }
-        ctx.restore();
+        if (now - d.born > d.life) drops.splice(i, 1);
+      }
+      for (i = smokes.length - 1; i >= 0; i--) {
+        var s = smokes[i];
+        s.x += s.vx * dt;
+        s.y += s.vy * dt;
+        s.r += 10 * S * dt;
+        if (now - s.born > s.life) smokes.splice(i, 1);
+      }
+      for (i = bits.length - 1; i >= 0; i--) {
+        var b = bits[i];
+        b.vy += 8 * S * dt;
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        b.rot += b.rv * dt;
+        b.r *= (1 - 0.8 * dt);
+        if (now - b.born > b.life) bits.splice(i, 1);
+      }
+      while (embers.length > 42) embers.shift();
+      while (drops.length > 8) drops.shift();
+      while (smokes.length > 12) smokes.shift();
+      while (tongues.length > 10) tongues.shift();
+      while (bits.length > 14) bits.shift();
+    }
+
+    function extractOutline(img) {
+      var c = document.createElement('canvas');
+      c.width = IMG_W;
+      c.height = IMG_H;
+      var g = c.getContext('2d');
+      g.drawImage(img, 0, 0);
+      var data = g.getImageData(0, 0, IMG_W, IMG_H).data;
+      function solid(x, y) {
+        if (x < 0 || y < 0 || x >= IMG_W || y >= IMG_H) return false;
+        var i = ((y | 0) * IMG_W + (x | 0)) * 4;
+        // Solid body only — skip the soft glow and the ring.
+        return data[i + 3] > 180 && (data[i] + data[i + 1] + data[i + 2]) > 170;
+      }
+      var pts = [];
+      var N = 80;
+      for (var k = 0; k < N; k++) {
+        var a = -Math.PI / 2 + (k / N) * Math.PI * 2;
+        var ca = Math.cos(a), sa = Math.sin(a);
+        var hit = 24, r;
+        for (r = 16; r < 300; r += 2) {
+          if (!solid(BULB_CX + ca * r, BULB_CY + sa * r)) { hit = r - 1; break; }
+        }
+        pts.push({ a: a, r: hit, ca: ca, sa: sa, upper: sa < -0.05 });
+      }
+      return pts;
+    }
+
+    function makeGlow() {
+      var c = document.createElement('canvas');
+      var size = 384;
+      c.width = c.height = size;
+      var g = c.getContext('2d');
+      var grd = g.createRadialGradient(size / 2, size * 0.52, size * 0.08, size / 2, size * 0.52, size * 0.5);
+      grd.addColorStop(0, 'rgba(194,65,12,0.55)');
+      grd.addColorStop(0.32, 'rgba(138,42,10,0.32)');
+      grd.addColorStop(0.62, 'rgba(70,8,4,0.14)');
+      grd.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = grd;
+      g.fillRect(0, 0, size, size);
+      return c;
+    }
+
+    function makeSoftDot() {
+      var c = document.createElement('canvas');
+      var size = 96;
+      c.width = c.height = size;
+      var g = c.getContext('2d');
+      var grd = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+      grd.addColorStop(0, 'rgba(255,252,246,0.95)');
+      grd.addColorStop(0.35, 'rgba(255,248,230,0.40)');
+      grd.addColorStop(1, 'rgba(255,248,230,0)');
+      g.fillStyle = grd;
+      g.fillRect(0, 0, size, size);
+      return c;
+    }
+
+    function strokeRound(ctx, pts, thick) {
+      if (pts.length < 2) return;
+      ctx.lineWidth = thick;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+    }
+
+    function eyeCenters() {
+      var half = (GAP * EYE_D + EYE_D) / 2;
+      return { lx: FACE_CX - half, rx: FACE_CX + half, y: FACE_CY };
+    }
+
+    function mouthCenterY(curve, width, thick) {
+      var eyeBottom = FACE_CY + EYE_D / 2;
+      var w = width * EYE_D;
+      var t = thick * EYE_D;
+      var R = Math.max(2, (w - t) / 2);
+      if (curve >= 0) {
+        return eyeBottom - R * Math.sin(20 * Math.PI / 180) * Math.max(curve, 0.0001) + t / 2;
+      }
+      return eyeBottom + R * Math.abs(curve) + t / 2;
+    }
+
+    function fillCutoutEllipse(c, x, y, rx, ry) {
+      if (rx < 0.4 || ry < 0.4) return;
+      c.save();
+      c.beginPath();
+      c.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+      var g = c.createRadialGradient(x, y + ry * 0.18, rx * 0.08, x, y, Math.max(rx, ry));
+      g.addColorStop(0, '#140603');
+      g.addColorStop(0.62, '#2a0c08');
+      g.addColorStop(0.84, '#6a220c');
+      g.addColorStop(1, '#e07020');
+      c.fillStyle = g;
+      c.fill();
+      c.strokeStyle = 'rgba(255, 140, 40, 0.9)';
+      c.lineWidth = Math.max(1.15, Math.min(rx, ry) * 0.14);
+      c.lineCap = 'round';
+      c.lineJoin = 'round';
+      c.stroke();
+      c.restore();
+    }
+
+    function strokeCutout(c, pts, thick) {
+      if (!pts || pts.length < 2) return;
+      c.save();
+      c.lineCap = 'round';
+      c.lineJoin = 'round';
+      c.beginPath();
+      c.moveTo(pts[0].x, pts[0].y);
+      for (var i = 1; i < pts.length; i++) c.lineTo(pts[i].x, pts[i].y);
+      c.strokeStyle = 'rgba(255, 132, 40, 0.95)';
+      c.lineWidth = thick + Math.max(1.5, thick * 0.32);
+      c.stroke();
+      c.strokeStyle = '#1a0704';
+      c.lineWidth = thick;
+      c.stroke();
+      c.restore();
+    }
+
+    function applyFaceFrame(now) {
+      if (!colorReady || !colorMeta || !colorMeta.faceX) return;
+      var i = flipFrameAt(now);
+      FACE_CX = colorMeta.faceX[i];
+      FACE_CY = colorMeta.faceY[i];
+    }
+
+    function drawEyeStyle(c, cx, cy, D, kind, dir, rot, open, alpha) {
+      if (alpha < 0.04) return;
+      c.save();
+      c.globalAlpha *= alpha;
+      c.translate(cx, cy);
+      c.rotate(rot || 0);
+      var r = D / 2;
+      var thick = D * 0.18;
+      c.fillStyle = faceInk;
+      c.strokeStyle = faceInk;
+      c.lineCap = 'round';
+      c.lineJoin = 'round';
+      if (colorReady) {
+        if (kind === 'circle') {
+          var ryC = r * Math.max(0.16, 1 - open);
+          fillCutoutEllipse(c, 0, 0, r, ryC);
+        } else if (kind === 'happy') {
+          var ptsH = [];
+          var nH = 10, rxH = D * 0.46, ryH = D * 0.28;
+          for (var iH = 0; iH <= nH; iH++) {
+            var tH = iH / nH;
+            var aH = Math.PI + tH * Math.PI;
+            ptsH.push({ x: Math.cos(aH) * rxH, y: Math.sin(aH) * ryH + D * 0.08 });
+          }
+          strokeCutout(c, ptsH, thick * 1.25);
+        } else if (kind === 'sad') {
+          var ptsS = [];
+          var nS = 10, rxS = D * 0.46, ryS = D * 0.28;
+          for (var jS = 0; jS <= nS; jS++) {
+            var tS = jS / nS;
+            var aS = tS * Math.PI;
+            ptsS.push({ x: Math.cos(aS) * rxS, y: Math.sin(aS) * ryS - D * 0.08 });
+          }
+          strokeCutout(c, ptsS, thick * 1.25);
+        } else if (kind === 'caret') {
+          var hC = D * 0.28, wC = D * 0.42;
+          strokeCutout(c, [{ x: -wC, y: hC * 0.3 }, { x: 0, y: -hC }, { x: wC, y: hC * 0.3 }], thick * 1.3);
+        } else if (kind === 'chev') {
+          var sC = D * 0.38 * (dir || 1);
+          strokeCutout(c, [
+            { x: -sC * 0.15, y: -sC * 0.85 },
+            { x: sC * 0.7, y: 0 },
+            { x: -sC * 0.15, y: sC * 0.85 }
+          ], thick * 1.3);
+        } else if (kind === 'ex') {
+          var kC = D * 0.36;
+          strokeCutout(c, [{ x: -kC, y: -kC }, { x: kC, y: kC }], thick * 1.2);
+          strokeCutout(c, [{ x: kC, y: -kC }, { x: -kC, y: kC }], thick * 1.2);
+        } else if (kind === 'flat' || kind === 'slit') {
+          var slC = D * (kind === 'slit' ? 0.48 : 0.42);
+          strokeCutout(c, [{ x: -slC, y: 0 }, { x: slC, y: 0 }], thick * 1.2);
+        }
+        c.restore();
+        return;
+      }
+      if (kind === 'circle') {
+        var ry = r * Math.max(0.08, 1 - open);
+        c.beginPath();
+        c.ellipse(0, 0, r, ry, 0, 0, Math.PI * 2);
+        c.fill();
+      } else if (kind === 'happy') {
+        // closed happy eye: upward arc
+        var pts = [];
+        var n = 10, rx = D * 0.46, ry = D * 0.28;
+        for (var i = 0; i <= n; i++) {
+          var t = i / n;
+          var a = Math.PI + t * Math.PI;
+          pts.push({ x: Math.cos(a) * rx, y: Math.sin(a) * ry + D * 0.08 });
+        }
+        strokeRound(c, pts, thick);
+      } else if (kind === 'sad') {
+        var pts2 = [];
+        var n2 = 10, rx2 = D * 0.46, ry2 = D * 0.28;
+        for (var j = 0; j <= n2; j++) {
+          var t2 = j / n2;
+          var a2 = t2 * Math.PI;
+          pts2.push({ x: Math.cos(a2) * rx2, y: Math.sin(a2) * ry2 - D * 0.08 });
+        }
+        strokeRound(c, pts2, thick);
+      } else if (kind === 'caret') {
+        var h = D * 0.28, w = D * 0.42;
+        strokeRound(c, [{ x: -w, y: h * 0.3 }, { x: 0, y: -h }, { x: w, y: h * 0.3 }], thick * 1.05);
+      } else if (kind === 'chev') {
+        var s = D * 0.38 * (dir || 1);
+        strokeRound(c, [
+          { x: -s * 0.15, y: -s * 0.85 },
+          { x: s * 0.7, y: 0 },
+          { x: -s * 0.15, y: s * 0.85 }
+        ], thick * 1.05);
+      } else if (kind === 'ex') {
+        var k = D * 0.36;
+        strokeRound(c, [{ x: -k, y: -k }, { x: k, y: k }], thick);
+        strokeRound(c, [{ x: k, y: -k }, { x: -k, y: k }], thick);
+      } else if (kind === 'flat') {
+        strokeRound(c, [{ x: -D * 0.42, y: 0 }, { x: D * 0.42, y: 0 }], thick * 1.05);
+      } else if (kind === 'slit') {
+        var sl = D * 0.48;
+        strokeRound(c, [{ x: -sl, y: 0 }, { x: sl, y: 0 }], thick * 0.95);
+      }
+      c.restore();
+    }
+
+    function drawBrows(c, lx, rx, y, D, amt) {
+      if (amt < 0.05) return;
+      c.save();
+      c.globalAlpha *= amt;
+      if (colorReady) {
+        var thickB = D * 0.13;
+        var liftB = D * 0.16;
+        var outB = D * 0.22;
+        var upB = -D * 0.58;
+        strokeCutout(c, [
+          { x: lx - outB, y: y + upB + liftB * 0.2 },
+          { x: lx + outB * 0.9, y: y + upB - liftB }
+        ], thickB);
+        strokeCutout(c, [
+          { x: rx + outB, y: y + upB + liftB * 0.2 },
+          { x: rx - outB * 0.9, y: y + upB - liftB }
+        ], thickB);
+        c.restore();
+        return;
+      }
+      c.strokeStyle = faceInk;
+      var thick = D * 0.11;
+      // inner ends raised (worried)
+      var lift = D * 0.16;
+      var out = D * 0.22;
+      var up = -D * 0.58;
+      strokeRound(c, [
+        { x: lx - out, y: y + up + lift * 0.2 },
+        { x: lx + out * 0.9, y: y + up - lift }
+      ], thick);
+      strokeRound(c, [
+        { x: rx + out, y: y + up + lift * 0.2 },
+        { x: rx - out * 0.9, y: y + up - lift }
+      ], thick);
+      c.restore();
+    }
+
+    function drawMouth(c, p, tNow) {
+      var width = p.mouthW * EYE_D;
+      var thick = p.mouthThick * EYE_D;
+      var curve = p.mouthCurve;
+      var open = p.mouthOpen;
+      if (talkingNow()) {
+        var pulse = 0.38 + 0.62 * Math.abs(Math.sin(tNow * 10.5));
+        open = Math.max(open, 0.55 * pulse + 0.15);
+        curve = lerp(curve, 0.35, 0.7);
+        width = lerp(width, 0.62 * EYE_D, 0.5);
+      }
+      var mx = FACE_CX;
+      var my = mouthCenterY(curve, width / EYE_D, thick / EYE_D);
+
+      if (colorReady) {
+        if (open > 0.08) {
+          var rr = EYE_D * (0.42 + 0.26 * Math.min(1, open));
+          var oy = FACE_CY + EYE_D * 1.09;
+          if (open < 0.95) {
+            fillCutoutEllipse(c, mx, oy, width * 0.42, EYE_D * (0.12 + 0.28 * open));
+          } else {
+            fillCutoutEllipse(c, mx, oy, rr, rr);
+          }
+          return;
+        }
+        if (p.mouthWave > 0.08 && Math.abs(curve) < 0.85) {
+          var ptsW = [];
+          var nW = 16;
+          var halfW = width / 2;
+          var ampW = EYE_D * 0.14 * p.mouthWave;
+          var yW = FACE_CY + EYE_D / 2 + thick / 2;
+          for (var iW = 0; iW <= nW; iW++) {
+            var tW = iW / nW;
+            ptsW.push({ x: mx - halfW + tW * width, y: yW + Math.sin(tW * Math.PI * 2) * ampW });
+          }
+          strokeCutout(c, ptsW, thick * 1.15);
+          return;
+        }
+        if (Math.abs(curve) < 0.12) {
+          var yLineC = FACE_CY + EYE_D / 2 + thick / 2;
+          strokeCutout(c, [
+            { x: mx - width / 2, y: yLineC },
+            { x: mx + width / 2, y: yLineC }
+          ], thick * 1.15);
+          return;
+        }
+        var RC = Math.max(2, (width - thick) / 2);
+        var ptsC = [];
+        var nC = 18;
+        var a0C, a1C, ryC;
+        if (curve > 0) {
+          a0C = 20; a1C = 160;
+          ryC = RC * Math.min(1, 0.55 + 0.45 * curve);
+        } else {
+          a0C = 200; a1C = 340;
+          ryC = RC * Math.min(1, 0.55 + 0.45 * Math.abs(curve));
+        }
+        for (var jC = 0; jC <= nC; jC++) {
+          var uC = jC / nC;
+          var aC = (a0C + (a1C - a0C) * uC) * Math.PI / 180;
+          ptsC.push({ x: mx + Math.cos(aC) * RC, y: my + Math.sin(aC) * ryC });
+        }
+        strokeCutout(c, ptsC, thick * 1.15);
         return;
       }
 
-      function trace(halfW, shrink) {
-        var N = 18;
-        var sx = shrink, sy = shrink;
-        var ptsL = [];
-        var ptsR = [];
-        for (var i = 0; i <= N; i++) {
-          var t = i / N;
-          var pt = quadPt(x0, yL, cX, cY, x2, yR, t);
-          var tg = quadTan(x0, yL, cX, cY, x2, yR, t);
-          var len = Math.hypot(tg.x, tg.y) || 1;
-          var nx = -tg.y / len, ny = tg.x / len;
-          ptsL.push([pt.x * sx + nx * halfW, pt.y * sy + ny * halfW]);
-          ptsR.push([pt.x * sx - nx * halfW, pt.y * sy - ny * halfW]);
-        }
-        var start = quadPt(x0, yL, cX, cY, x2, yR, 0);
-        var end = quadPt(x0, yL, cX, cY, x2, yR, 1);
-        var t0 = quadTan(x0, yL, cX, cY, x2, yR, 0);
-        var t1 = quadTan(x0, yL, cX, cY, x2, yR, 1);
-        var a0 = Math.atan2(t0.y, t0.x);
-        var a1 = Math.atan2(t1.y, t1.x);
-        ctx.moveTo(ptsL[0][0], ptsL[0][1]);
-        for (var j = 1; j < ptsL.length; j++) ctx.lineTo(ptsL[j][0], ptsL[j][1]);
-        ctx.arc(end.x * sx, end.y * sy, halfW, a1 - Math.PI / 2, a1 + Math.PI / 2);
-        for (var k = ptsR.length - 1; k >= 0; k--) ctx.lineTo(ptsR[k][0], ptsR[k][1]);
-        ctx.arc(start.x * sx, start.y * sy, halfW, a0 + Math.PI / 2, a0 - Math.PI / 2);
-        ctx.closePath();
+      c.strokeStyle = faceInk;
+      c.fillStyle = faceInk;
+
+      if (open > 0.08) {
+        var rx = width * 0.42;
+        var ry = EYE_D * (0.10 + 0.22 * open);
+        var oy = FACE_CY + EYE_D / 2 + ry * 0.15 + thick * 0.2;
+        c.lineWidth = Math.max(1.5, thick * 0.55);
+        c.beginPath();
+        c.ellipse(mx, oy, rx, ry, 0, 0, Math.PI * 2);
+        c.stroke();
+        return;
       }
 
-      ctx.beginPath();
-      trace(Math.max(half, 1.6 * S), 1);
-      if (hole > 0.1) {
-        var innerH = Math.max(1, half * hole * 0.62);
-        trace(innerH, 0.82);
-        ctx.fill('evenodd');
+      if (p.mouthWave > 0.08 && Math.abs(curve) < 0.85) {
+        var pts = [];
+        var n = 16;
+        var half = width / 2;
+        var amp = EYE_D * 0.14 * p.mouthWave;
+        var y0 = FACE_CY + EYE_D / 2 + thick / 2;
+        for (var i = 0; i <= n; i++) {
+          var t = i / n;
+          var x = mx - half + t * width;
+          var y = y0 + Math.sin(t * Math.PI * 2) * amp;
+          pts.push({ x: x, y: y });
+        }
+        strokeRound(c, pts, thick);
+        return;
+      }
+
+      if (Math.abs(curve) < 0.12) {
+        // flat unamused line, top at the eye line
+        var yLine = FACE_CY + EYE_D / 2 + thick / 2;
+        strokeRound(c, [
+          { x: mx - width / 2, y: yLine },
+          { x: mx + width / 2, y: yLine }
+        ], thick);
+        return;
+      }
+
+      var R = Math.max(2, (width - thick) / 2);
+      var pts2 = [];
+      var n2 = 18;
+      var a0, a1, ry;
+      if (curve > 0) {
+        a0 = 20; a1 = 160;
+        ry = R * Math.min(1, 0.55 + 0.45 * curve);
       } else {
-        ctx.fill();
+        a0 = 200; a1 = 340;
+        ry = R * Math.min(1, 0.55 + 0.45 * Math.abs(curve));
       }
-      ctx.restore();
+      for (var j = 0; j <= n2; j++) {
+        var u = j / n2;
+        var a = (a0 + (a1 - a0) * u) * Math.PI / 180;
+        pts2.push({ x: mx + Math.cos(a) * R, y: my + Math.sin(a) * ry });
+      }
+      strokeRound(c, pts2, thick);
     }
 
-    function drawTearDrop(ctx, x, y, s) {
-      ctx.beginPath();
-      ctx.moveTo(x, y - s);
-      ctx.bezierCurveTo(x + s * 0.62, y - s * 0.15, x + s * 0.62, y + s * 0.45, x, y + s);
-      ctx.bezierCurveTo(x - s * 0.62, y + s * 0.45, x - s * 0.62, y - s * 0.15, x, y - s);
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(168, 210, 255, 0.95)';
-      ctx.fill();
+    function drawFace(c, tNow) {
+      var eyes = eyeCenters();
+      // Look: shift the whole face a little, staying inside the bulb.
+      var maxLook = EYE_D * 0.28;
+      var ox = look.x * maxLook;
+      var oy = look.y * maxLook * 0.85;
+      c.save();
+      c.translate(ox, oy);
+
+      var D = EYE_D;
+      var open = blink;
+
+      // Soft pre-rendered glow under features (no per-frame filters).
+      if (softDot && !blackFace) {
+        var gs = D * 2.6;
+        c.globalAlpha = 0.55;
+        c.drawImage(softDot, eyes.lx - gs / 2, eyes.y - gs / 2, gs, gs);
+        c.drawImage(softDot, eyes.rx - gs / 2, eyes.y - gs / 2, gs, gs);
+        var mg = D * 1.8;
+        c.drawImage(softDot, FACE_CX - mg / 2, FACE_CY + D * 0.25 - mg / 2, mg, mg);
+        c.globalAlpha = 1;
+      }
+
+      function pair(kind, lAmt, rAmt, lDir, rDir, lRot, rRot) {
+        drawEyeStyle(c, eyes.lx, eyes.y, D, kind, lDir, lRot, open, lAmt);
+        drawEyeStyle(c, eyes.rx, eyes.y, D, kind, rDir, rRot, open, rAmt);
+      }
+
+      pair('circle', cur.lCircle, cur.rCircle, 1, 1, 0, 0);
+      pair('happy', cur.lHappy, cur.rHappy, 1, 1, 0, 0);
+      pair('sad', cur.lSad, cur.rSad, 1, 1, 0, 0);
+      pair('caret', cur.lCaret, cur.rCaret, 1, 1, 0, 0);
+      pair('chev', cur.lChev, cur.rChev, cur.lChevDir, cur.rChevDir, 0, 0);
+      pair('ex', cur.lEx, cur.rEx, 1, 1, 0, 0);
+      pair('flat', cur.lFlat, cur.rFlat, 1, 1, 0, 0);
+      pair('slit', cur.lSlit, cur.rSlit, 1, 1, cur.lSlitRot, cur.rSlitRot);
+      drawBrows(c, eyes.lx, eyes.rx, eyes.y, D, cur.brow);
+      drawMouth(c, cur, tNow);
+      c.restore();
     }
 
-    function drawFace(dtAlready, now) {
-      var breathe = 1 + Math.sin(now * 1.45) * 0.018;
-      var pulse = 1 + (cur.pulseAmp > 0.05 ? Math.sin(now * 2.4) * 0.035 * cur.pulseAmp : 0);
-      var bounce = cur.bounceAmp > 0.05 ? -Math.abs(Math.sin(now * 8.6)) * cur.bounceAmp * 16 * S : 0;
-      var bounceSq = cur.bounceAmp > 0.05 ? Math.cos(now * 8.6) * cur.bounceAmp * 0.08 : 0;
-      var shakeX = cur.shakeAmp > 0.05 ? Math.sin(now * 58) * cur.shakeAmp * 3.2 * S : 0;
-      var shakeY = cur.shakeAmp > 0.05 ? Math.cos(now * 51) * cur.shakeAmp * 2.2 * S : 0;
+    function drawWarpedTip(c, tNow) {
+      // Warp the painted crown as one piece around the neck so the tip
+      // whips, stretches and curls without striping. Face stays planted.
+      if (!bodyImg) return;
+      var sway = 20 * n1(tNow * 11.2, 1.1) + 12 * n1(tNow * 6.3, 5.4);
+      var stretch = 1 + 0.18 * n1(tNow * 8.4, 3.2) + 0.05 * flare;
+      var curl = 0.16 * n1(tNow * 7.2, 2.1) + 0.07 * n1(tNow * 13.5, 4.8);
+      c.save();
+      c.translate(TIP_X + sway * 0.35, NECK_Y);
+      c.rotate(curl);
+      c.scale(1 + Math.abs(sway) * 0.001, stretch);
+      c.translate(-(TIP_X + sway * 0.35), -NECK_Y);
+      // Deep overlap past the neck so rotation never leaves a gap.
+      c.drawImage(bodyImg, 0, 0, IMG_W, NECK_Y + 36, 0, 0, IMG_W, NECK_Y + 36);
+      c.restore();
+    }
 
-      var speed = Math.hypot(pos.vx, pos.vy);
-      var stretch = clamp(speed * 0.00055, 0, 0.2);
-      var vAng = Math.atan2(pos.vy, pos.vx);
-
-      var lx = look.x;
-      var ly = look.y;
-      var shiftX = lx * 11 * S;
-      var shiftY = ly * 8 * S;
-      var near = 1 + Math.abs(lx) * 0.05;
-      var far = 1 - Math.abs(lx) * 0.08;
-      var lScale = lx >= 0 ? far : near;
-      var rScale = lx >= 0 ? near : far;
-
-      ctx.save();
-      ctx.translate(pos.x + shakeX, pos.y + bounce + shakeY);
-      ctx.rotate(lean + cur.tilt);
-      if (stretch > 0.002) {
-        ctx.rotate(vAng);
-        ctx.scale(1 + stretch, 1 / (1 + stretch));
-        ctx.rotate(-vAng);
+    function drawRim(c, tNow) {
+      if (!outline || !outline.length) return;
+      c.save();
+      c.lineJoin = 'round';
+      c.lineCap = 'round';
+      var layers = [
+        { w: 8, col: 'rgba(255,110,30,0.20)', amp: 1.1 },
+        { w: 4.2, col: 'rgba(255,190,80,0.48)', amp: 1.0 },
+        { w: 1.8, col: 'rgba(255,244,210,0.70)', amp: 0.85 }
+      ];
+      var li, i, pt, a, r, u, disp;
+      for (li = 0; li < layers.length; li++) {
+        var L = layers[li];
+        c.strokeStyle = L.col;
+        c.lineWidth = L.w;
+        c.beginPath();
+        for (i = 0; i < outline.length; i++) {
+          pt = outline[i];
+          u = pt.upper ? 1 : 0.28;
+          disp = n1(tNow * 12.4 + i * 0.37, 0.7) * 6 * u * L.amp
+            + n1(tNow * 7.1 + i * 0.18, 2.8) * 4 * u * L.amp
+            + flare * 4 * u;
+          r = pt.r + disp;
+          a = pt.a + n1(tNow * 8.2 + i * 0.2, 4.4) * 0.02 * u;
+          var x = BULB_CX + Math.cos(a) * r;
+          var y = BULB_CY + Math.sin(a) * r;
+          if (i === 0) c.moveTo(x, y);
+          else c.lineTo(x, y);
+        }
+        c.closePath();
+        c.stroke();
       }
-      var sq = 1 - squash - (bounceSq > 0 ? bounceSq : 0) * 0.5;
-      var sy = (1 + squash * 0.4 + Math.max(0, -bounceSq)) * breathe * pulse;
-      var sx = (1 / Math.max(0.72, sq)) * breathe * pulse;
-      ctx.scale(sx, sy);
+      c.restore();
+    }
 
-      ctx.scale(S, S);
-      ctx.translate(shiftX / S, shiftY / S);
-
-      if (cur.blush > 0.02) {
-        var ba = 0.82 * cur.blush;
-        ctx.fillStyle = 'rgba(255, 158, 180,' + ba + ')';
-        ctx.beginPath();
-        ctx.ellipse(-56, 16, 18, 11, 0, 0, Math.PI * 2);
-        ctx.ellipse(56, 16, 18, 11, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = 'rgba(255, 190, 205,' + (0.45 * cur.blush) + ')';
-        ctx.beginPath();
-        ctx.ellipse(-56, 16, 11, 7, 0, 0, Math.PI * 2);
-        ctx.ellipse(56, 16, 11, 7, 0, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      var bL = blink;
-      var bR = blink;
-      if (cur.eyeLopen < 0.08) bL = 0;
-      if (cur.eyeRopen < 0.08) bR = 0;
-      var oL = clamp(cur.eyeLopen * (1 - bL), 0, 1);
-      var oR = clamp(cur.eyeRopen * (1 - bR), 0, 1);
-
-      drawEye(ctx, cur.eyeLX * lScale, cur.eyeLY, cur.eyeLrx * lScale, cur.eyeLry * lScale,
-        cur.eyeLrot, oL, cur.eyeLarc, cur.eyeLheart);
-      drawEye(ctx, cur.eyeRX * rScale, cur.eyeRY, cur.eyeRrx * rScale, cur.eyeRry * rScale,
-        cur.eyeRrot, oR, cur.eyeRarc, cur.eyeRheart);
-
-      var mp = {
-        mouthX: cur.mouthX, mouthY: cur.mouthY,
-        mouthW: cur.mouthW, mouthThick: cur.mouthThick,
-        mouthCurve: cur.mouthCurve, mouthOpen: cur.mouthOpen,
-        mouthSmirk: cur.mouthSmirk, mouthWobble: cur.mouthWobble
-      };
-      drawMouth(ctx, mp, now);
-
-      if (cur.dots > 0.05) {
-        var da = cur.dots;
-        for (var d = 0; d < 3; d++) {
-          var ph = now * 4.2 - d * 0.45;
-          var yy = -42 - Math.max(0, Math.sin(ph)) * 5;
-          var xx = 54 + d * 12;
-          var rad = 2.6 + Math.max(0, Math.sin(ph)) * 0.7;
-          ctx.beginPath();
-          ctx.arc(xx, yy, rad, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(255,255,255,' + (0.85 * da) + ')';
-          ctx.fill();
+    function drawTongues(c, tNow) {
+      c.save();
+      c.lineCap = 'round';
+      c.lineJoin = 'round';
+      var i;
+      for (i = 0; i < tongues.length; i++) {
+        var tg = tongues[i];
+        var u = clamp((tNow - tg.born) / tg.life, 0, 1);
+        // grow quickly, then taper off — like the gif's short lick cycles
+        var env = u < 0.4 ? u / 0.4 : Math.max(0, 1 - (u - 0.4) / 0.6);
+        env = env * env * (3 - 2 * env);
+        var len = tg.maxLen * env;
+        if (len < 4) continue;
+        var wob = n1(tNow * 10 + tg.seed, 1.5);
+        var tipX = tg.baseX + tg.curl * (16 + len * 0.35) * (0.6 + 0.4 * wob) + n1(tNow * 14 + tg.seed, 3) * 8;
+        var tipY = tg.baseY - len;
+        var midX = tg.baseX + (tipX - tg.baseX) * 0.45 + n1(tNow * 9 + tg.seed, 2.2) * 12;
+        var midY = tg.baseY - len * 0.5;
+        var w = tg.width * (0.55 + 0.45 * env);
+        c.strokeStyle = tg.hot
+          ? ('rgba(255,244,210,' + (0.55 + 0.35 * env) + ')')
+          : ('rgba(255,170,70,' + (0.40 + 0.35 * env) + ')');
+        c.lineWidth = w;
+        c.beginPath();
+        c.moveTo(tg.baseX, tg.baseY);
+        c.quadraticCurveTo(midX, midY, tipX, tipY);
+        c.stroke();
+        if (tg.hot) {
+          c.strokeStyle = 'rgba(255,250,230,0.7)';
+          c.lineWidth = w * 0.35;
+          c.beginPath();
+          c.moveTo(tg.baseX, tg.baseY);
+          c.quadraticCurveTo(midX, midY, tipX, tipY);
+          c.stroke();
         }
       }
+      c.restore();
+    }
 
-      /* attached tears in face space */
-      var ti;
-      for (ti = 0; ti < tears.length; ti++) {
-        var tr = tears[ti];
-        if (!tr.attached) continue;
-        var ex = tr.side < 0 ? cur.eyeLX * lScale : cur.eyeRX * rScale;
-        var ey = (tr.side < 0 ? cur.eyeLY : cur.eyeRY) + (tr.side < 0 ? cur.eyeLry : cur.eyeRry) * 0.85;
-        var ts = (5 + tr.grow * 4);
-        tr._fx = ex; tr._fy = ey + 6 + tr.grow * 4;
-        drawTearDrop(ctx, tr._fx, tr._fy, ts);
+    function drawAttachedDrips(c, tNow, xf) {
+      var i, d;
+      c.save();
+      c.fillStyle = 'rgba(255,170,70,0.95)';
+      c.strokeStyle = 'rgba(255,200,110,0.85)';
+      c.lineCap = 'round';
+      for (i = 0; i < drops.length; i++) {
+        d = drops[i];
+        if (!d.attached) continue;
+        var w = Math.max(1.2, d.r * (1 - d.stretch / (d.maxStretch + 8)));
+        c.lineWidth = w;
+        c.beginPath();
+        c.moveTo(d.sx, d.sy);
+        c.lineTo(d.sx + n1(tNow * 6, i) * 1.5, d.sy + d.stretch);
+        c.stroke();
+        c.beginPath();
+        c.ellipse(d.sx, d.sy + d.stretch, w * 0.7, w * 1.15, 0, 0, Math.PI * 2);
+        c.fill();
       }
+      c.restore();
+    }
 
+    function drawLicks(c, tNow) {
+      drawTongues(c, tNow);
+    }
+
+    function drawParticles(c, now, xf) {
+      var i, a, e, d, s, b;
+      for (i = 0; i < smokes.length; i++) {
+        s = smokes[i];
+        a = 1 - (now - s.born) / s.life;
+        a = a * a * 0.16;
+        if (a <= 0) continue;
+        c.fillStyle = 'rgba(96,78,70,' + a + ')';
+        c.beginPath();
+        c.ellipse(s.x, s.y, s.r * 1.15, s.r * 1.45, 0, 0, Math.PI * 2);
+        c.fill();
+        c.fillStyle = 'rgba(120,100,90,' + (a * 0.55) + ')';
+        c.beginPath();
+        c.ellipse(s.x + s.r * 0.25, s.y - s.r * 0.2, s.r * 0.7, s.r * 0.85, 0, 0, Math.PI * 2);
+        c.fill();
+      }
+      for (i = 0; i < bits.length; i++) {
+        b = bits[i];
+        a = 1 - (now - b.born) / b.life;
+        a = Math.max(0, a);
+        c.save();
+        c.translate(b.x, b.y);
+        c.rotate(b.rot);
+        c.fillStyle = 'rgba(255,190,90,' + (0.85 * a) + ')';
+        c.beginPath();
+        c.ellipse(0, 0, b.r * 0.55, b.r * b.tall, 0, 0, Math.PI * 2);
+        c.fill();
+        c.restore();
+      }
+      for (i = 0; i < embers.length; i++) {
+        e = embers[i];
+        a = 1 - (now - e.born) / e.life;
+        a = Math.max(0, a);
+        var col = e.hue < 0.45 ? '255,230,160' : (e.hue < 0.8 ? '255,180,80' : '255,255,230');
+        c.fillStyle = 'rgba(' + col + ',' + (0.9 * a) + ')';
+        c.beginPath();
+        c.arc(e.x, e.y, e.r * (0.7 + 0.3 * a), 0, Math.PI * 2);
+        c.fill();
+      }
+      for (i = 0; i < drops.length; i++) {
+        d = drops[i];
+        if (d.attached) continue;
+        a = 1 - (now - d.born) / d.life;
+        a = Math.max(0, a);
+        c.fillStyle = 'rgba(255,170,70,' + (0.92 * a) + ')';
+        c.beginPath();
+        c.ellipse(d.x, d.y, d.r * 0.55 * S, d.r * 1.45 * S, 0, 0, Math.PI * 2);
+        c.fill();
+      }
+    }
+
+    function drawFaceLayer(now, xf) {
+      applyFaceFrame(now);
+      ctx.save();
+      ctx.translate(xf.x, xf.y);
+      ctx.rotate(xf.ang);
+      ctx.scale(xf.scx, xf.scy);
+      ctx.translate(-ANCHOR_X, -ANCHOR_Y);
+      if (!glOk && !colorReady) drawAttachedDrips(ctx, now, xf);
+      drawFace(ctx, now);
       ctx.restore();
+      if (!colorReady) drawParticles(ctx, now, xf);
+    }
 
-      /* world-space falling tears + zzz */
+    function drawEcho(now) {
+      var xf = currentXF();
+      if (glOk) {
+        renderFlameGL(now, xf);
+        return;
+      }
+      if (!ready || !bodyImg) return;
+
       ctx.save();
-      for (ti = 0; ti < tears.length; ti++) {
-        var tr2 = tears[ti];
-        if (tr2.attached) {
-          /* convert last face-local to a spawn world pos once detached next frame */
-          tr2._wx = pos.x + shakeX;
-          tr2._wy = pos.y + bounce + shakeY;
-          continue;
-        }
-        if (tr2.wx == null && tr2._fx != null) {
-          /* approximate: start from face origin + local (ignore rot for simplicity if just detached) */
-          var ca = Math.cos(lean + cur.tilt), sa = Math.sin(lean + cur.tilt);
-          var lx2 = tr2._fx * S, ly2 = tr2._fy * S;
-          tr2.wx = pos.x + lx2 * ca - ly2 * sa;
-          tr2.wy = pos.y + lx2 * sa + ly2 * ca;
-          tr2.x = 0; tr2.y = 0;
-        }
-        if (tr2.wx == null) continue;
-        var age = now - tr2.born;
-        var fade = age > tr2.life ? 1 - (age - tr2.life) / 0.35 : 1;
-        ctx.globalAlpha = clamp(fade, 0, 1);
-        drawTearDrop(ctx, tr2.wx + tr2.x, tr2.wy + tr2.y, 8 * S);
+      ctx.translate(xf.x, xf.y);
+      ctx.rotate(xf.ang);
+      ctx.scale(xf.scx, xf.scy);
+      ctx.translate(-FACE_CX, -FACE_CY);
+
+      // Irregular glow pulse (pre-rendered, no CSS/canvas filters).
+      if (glowCvs) {
+        var pulse = 0.62
+          + 0.20 * (0.5 + 0.5 * Math.sin(now * 2.05))
+          + 0.12 * n1(now * 5.6, 1.3)
+          + 0.10 * flare;
+        pulse = clamp(pulse, 0.45, 1.05);
+        var gw = (SOLID_W + 270);
+        var gh = gw * (1 + 0.04 * n1(now * 3.4, 2));
+        ctx.globalAlpha = pulse;
+        ctx.drawImage(glowCvs, BULB_CX - gw / 2, BULB_CY - gh * 0.46, gw, gh);
         ctx.globalAlpha = 1;
       }
 
-      var faceTop = pos.y - 36 * S;
-      var faceRight = pos.x + 22 * S;
-      ctx.font = '600 ' + Math.round(18 * S) + 'px -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      for (var zi = 0; zi < zzzs.length; zi++) {
-        var z = zzzs[zi];
-        var za = z.age / z.life;
-        var alpha = z.age < 0.15 ? z.age / 0.15 : (za > 0.7 ? (1 - za) / 0.3 : 1);
-        alpha *= cur.zzz;
-        ctx.save();
-        ctx.globalAlpha = clamp(alpha, 0, 1);
-        ctx.translate(faceRight + z.x, faceTop + z.y);
-        ctx.rotate(z.rot + za * 0.3);
-        ctx.fillStyle = '#fff';
-        ctx.fillText(z.ch, 0, 0);
-        ctx.restore();
-      }
+      // Lower body (bulb, face area, painted drips) stays planted.
+      // Brightness flicker on the painted body, no filters.
+      var bodyA = 0.88 + 0.12 * (0.5 + 0.5 * n1(now * 14.2, 0.6)) + 0.06 * flare;
+      ctx.globalAlpha = clamp(bodyA, 0.82, 1);
+      var dripStretch = 1 + 0.04 * n1(now * 6.2, 2.4);
+      // Full body first so a whipping tip can never open a hole at the neck.
+      ctx.drawImage(bodyImg, 0, 0, IMG_W, IMG_H);
+      var mid = NECK_Y + 8;
+      ctx.drawImage(bodyImg, 0, mid, IMG_W, IMG_H - mid, 0, mid, IMG_W, (IMG_H - mid) * dripStretch);
+      drawWarpedTip(ctx, now);
+      ctx.globalAlpha = 1;
+
+      drawRim(ctx, now);
+      drawLicks(ctx, now);
+      drawAttachedDrips(ctx, now, xf);
+      drawFace(ctx, now);
       ctx.restore();
 
-      if (cur.pulseAmp > 0.2) {
-        var pr = (62 + (now * 0.55 % 1) * 28) * S * pulse;
-        var pa = (1 - (now * 0.55 % 1)) * 0.14 * cur.pulseAmp;
-        ctx.beginPath();
-        ctx.arc(pos.x, pos.y, pr, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(255,255,255,' + pa + ')';
-        ctx.lineWidth = 1.5 * S;
-        ctx.stroke();
-      }
+      drawParticles(ctx, now, xf);
     }
 
     function update(dt, now) {
-      time = now;
-      if (pokeUntil && now > pokeUntil) {
-        pokeUntil = 0;
-        if (autoOn) {
-          /* auto will pick next shortly */
-        } else {
-          setExpressionInternal(pokeReturn, true);
-        }
-      }
-      approachParams(dt);
-      updateMotion(dt, now);
-      updateLook(dt, now);
       updateBlink(dt, now);
-      updateEffects(dt, now);
+      updateLook(dt, now);
+      updateMotion(dt, now);
+      approachParams(dt);
       updateAuto(dt);
+      if (pokeUntil && now >= pokeUntil) pokeUntil = 0;
+      var xf = currentXF();
+      updateParticles(dt, now, xf);
     }
 
     function draw(now) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, W, H);
-      drawFace(0, now);
+      var xf = currentXF();
+      if (colorReady) {
+        ctx.clearRect(0, 0, W, H);
+        drawColorFlame(now, xf);
+        drawFaceLayer(now, xf);
+      } else if (glOk) {
+        ctx.clearRect(0, 0, W, H);
+        renderFlameGL(now, xf);
+        drawFaceLayer(now, xf);
+      } else {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, W, H);
+        drawEcho(now);
+      }
+      if (debugOn) {
+        fpsAcc += 1;
+        if (now - (fpsFrames || now) >= 0.5) {
+          fpsVal = Math.round(fpsAcc / Math.max(0.001, now - fpsFrames));
+          fpsFrames = now;
+          fpsAcc = 0;
+          fpsEl.textContent = fpsVal + ' fps';
+        }
+        if (!fpsFrames) fpsFrames = now;
+      }
     }
 
-    var last = performance.now();
     function loop(ts) {
-      var now = ts / 1000;
-      var dt = (ts - last) / 1000;
-      last = ts;
-      if (dt > 0.05) dt = 0.05;
-      update(dt, now);
-      draw(now);
-      fpsAcc += dt;
-      fpsFrames++;
-      if (fpsAcc >= 0.5) {
-        fpsVal = fpsFrames / fpsAcc;
-        fpsAcc = 0;
-        fpsFrames = 0;
-        if (debugOn) fpsEl.textContent = Math.round(fpsVal) + ' fps';
-      }
       requestAnimationFrame(loop);
+      var now = ts * 0.001;
+      var dt = last ? Math.min(0.05, now - last) : 0.016;
+      last = now;
+      time = now;
+      update(dt, now);
+      // Cap draws at 60fps (iPhone ProMotion can be 120).
+      if (lastDraw && (now - lastDraw) < 0.0155) return;
+      lastDraw = now;
+      draw(now);
     }
 
     function clientPoint(ev) {
-      if (ev.touches && ev.touches[0]) return { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
-      return { x: ev.clientX, y: ev.clientY };
+      var x, y;
+      if (ev.touches && ev.touches[0]) {
+        x = ev.touches[0].clientX;
+        y = ev.touches[0].clientY;
+      } else {
+        x = ev.clientX;
+        y = ev.clientY;
+      }
+      return { x: x, y: y };
     }
 
     var pointerDown = false;
@@ -1129,6 +1892,10 @@
     var downAt = 0;
     var downPt = { x: 0, y: 0 };
     var moved = false;
+
+    function hitRadius() {
+      return extents().left * 1.05;
+    }
 
     function onDown(ev) {
       if (ev.target && ev.target.closest && ev.target.closest('#bar')) return;
@@ -1142,24 +1909,21 @@
         try { canvas.setPointerCapture(ev.pointerId); } catch (e) {}
       }
       var dist = Math.hypot(p.x - pos.x, p.y - pos.y);
-      if (dist < faceRadius() * 1.15) {
-        pokeReturn = exprName === 'surprised' ? 'neutral' : exprName;
-        setExpressionInternal('surprised', true);
-        pokeUntil = time + 0.85;
+      look.tx = clamp((p.x - pos.x) / (80 * S), -1, 1);
+      look.ty = clamp((p.y - pos.y) / (80 * S), -1, 1);
+      look.until = time + 1.6;
+      if (dist < hitRadius() * 1.2) {
+        pokeUntil = time + 0.7;
         var ang = Math.atan2(pos.y - p.y, pos.x - p.x);
-        pos.vx += Math.cos(ang) * 220 * S;
-        pos.vy += Math.sin(ang) * 220 * S;
-        squash = 0.16;
-      } else {
-        look.tx = clamp((p.x - pos.x) / (140 * S), -1, 1);
-        look.ty = clamp((p.y - pos.y) / (140 * S), -1, 1);
-        look.until = time + 2.2;
-        if (!stillMode) {
-          var b = playable();
-          pos.tx = clamp(p.x, b.x0, b.x1);
-          pos.ty = clamp(p.y, b.y0, b.y1);
-          phase = 'move';
-        }
+        pos.vx += Math.cos(ang) * 46 * S;
+        pos.vy += Math.sin(ang) * 46 * S;
+        squash = 0.14;
+        flare = 1;
+        spawnTongue(time, 'crown');
+        spawnTongue(time, Math.random() < 0.5 ? 'left' : 'right');
+        var xf0 = currentXF();
+        spawnEmber(time, xf0, TIP_X, TIP_Y, true);
+        spawnEmber(time, xf0, TIP_X, TIP_Y, true);
       }
     }
 
@@ -1167,22 +1931,15 @@
       if (!pointerDown) return;
       var p = clientPoint(ev);
       if (Math.hypot(p.x - downPt.x, p.y - downPt.y) > 8) moved = true;
-      if (moved || time - downAt > 0.12) {
-        if (!stillMode) follow = { x: p.x, y: p.y };
-        look.tx = clamp((p.x - pos.x) / (140 * S), -1, 1);
-        look.ty = clamp((p.y - pos.y) / (140 * S), -1, 1);
-      }
+      look.tx = clamp((p.x - pos.x) / (100 * S), -1, 1);
+      look.ty = clamp((p.y - pos.y) / (100 * S), -1, 1);
+      look.until = time + 1.2;
     }
 
     function onUp(ev) {
       if (!pointerDown) return;
       pointerDown = false;
       pointerId = null;
-      follow = null;
-      if (!stillMode && phase === 'follow') {
-        phase = 'pause';
-        phaseUntil = time + rand(0.4, 1.1);
-      }
     }
 
     canvas.addEventListener('pointerdown', onDown);
@@ -1208,13 +1965,181 @@
     };
 
     buildUI();
+    softDot = makeSoftDot();
+    function flipFrameAt(now) {
+      if (!flipCumul.length) return 0;
+      var ms = ((now * 1000) % flipTotal + flipTotal) % flipTotal;
+      var lo = 0, hi = flipCumul.length - 1;
+      while (lo < hi) {
+        var mid = (lo + hi) >> 1;
+        if (flipCumul[mid] <= ms) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo;
+    }
+
+    function resizeFlame2D() {
+      if (!flameCanvas || !flame2d) return;
+      var fdpr = Math.min(window.devicePixelRatio || 1, 2);
+      var dw = Math.max(1, Math.round(W * fdpr));
+      var dh = Math.max(1, Math.round(H * fdpr));
+      if (flameCanvas.width !== dw || flameCanvas.height !== dh) {
+        flameCanvas.width = dw;
+        flameCanvas.height = dh;
+      }
+      flameCanvas.style.width = W + 'px';
+      flameCanvas.style.height = H + 'px';
+      flame2d.setTransform(fdpr, 0, 0, fdpr, 0, 0);
+    }
+
+    function drawColorFlame(now, xf) {
+      if (!flame2d || !colorReady || !colorMeta) return;
+      resizeFlame2D();
+      flame2d.setTransform(Math.min(window.devicePixelRatio || 1, 2), 0, 0, Math.min(window.devicePixelRatio || 1, 2), 0, 0);
+      flame2d.fillStyle = '#000';
+      flame2d.fillRect(0, 0, W, H);
+      var fi = flipFrameAt(now);
+      var per = colorMeta.perSheet;
+      var sheet = colorSheets[fi < per ? 0 : 1];
+      if (!sheet) return;
+      var local = fi % per;
+      var col = local % colorMeta.cols;
+      var row = Math.floor(local / colorMeta.cols);
+      var sx = col * colorMeta.cellW;
+      var sy = row * colorMeta.cellH;
+      flame2d.save();
+      flame2d.translate(xf.x, xf.y);
+      flame2d.rotate(xf.ang);
+      flame2d.scale(xf.scx, xf.scy);
+      flame2d.translate(-ANCHOR_X, -ANCHOR_Y);
+      flame2d.drawImage(sheet, sx, sy, colorMeta.cellW, colorMeta.cellH, 0, 0, colorMeta.cellW, colorMeta.cellH);
+      flame2d.restore();
+    }
+
+    function loadColorFlipbook() {
+      fetch(assetUrl('assets/flame-color.json')).then(function (r) { return r.json(); }).then(function (meta) {
+        colorMeta = meta;
+        var acc = 0, i;
+        flipCumul = [];
+        for (i = 0; i < meta.durs.length; i++) {
+          acc += meta.durs[i];
+          flipCumul.push(acc);
+        }
+        flipTotal = meta.totalMs || acc;
+        flipMeta = meta;
+        ANCHOR_X = meta.anchorX;
+        ANCHOR_Y = meta.anchorY;
+        FACE_CX = meta.anchorX;
+        FACE_CY = meta.anchorY;
+        if (meta.eyeD) EYE_D = meta.eyeD;
+        if (meta.gap != null) GAP = meta.gap;
+        var files = meta.sheets || [];
+        var left = files.length;
+        if (!left) return;
+        colorSheets = new Array(files.length);
+        files.forEach(function (name, idx) {
+          var img = new Image();
+          img.onload = function () {
+            colorSheets[idx] = img;
+            left -= 1;
+            if (left <= 0) {
+              colorReady = true;
+              startLoop();
+              resize();
+            }
+          };
+          img.onerror = function () { console.warn('Echo color sheet failed', name); };
+          img.src = assetUrl('assets/' + name);
+        });
+      }).catch(function (e) { console.warn('Echo color flipbook', e); loadFallbackFlame(); });
+    }
+
+    function loadFallbackFlame() {
+      glOk = initFlameGL();
+      if (glOk) loadFlipbook();
+      if (glOk) {
+        canvas.style.background = 'transparent';
+      } else if (flameCanvas) {
+        flameCanvas.style.display = 'none';
+      }
+    }
+
+    function loadFlipbook() {
+      if (!gl) return;
+      fetch(assetUrl('assets/flame-flipbook.json')).then(function (r) { return r.json(); }).then(function (meta) {
+        flipMeta = meta;
+        var acc = 0, i;
+        flipCumul = [];
+        for (i = 0; i < meta.durs.length; i++) {
+          acc += meta.durs[i];
+          flipCumul.push(acc);
+        }
+        flipTotal = meta.totalMs || acc;
+        var img = new Image();
+        img.onload = function () {
+          var c = document.createElement('canvas');
+          c.width = meta.atlas;
+          c.height = meta.atlas;
+          var g = c.getContext('2d');
+          g.drawImage(img, 0, 0);
+          flipTex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, flipTex);
+          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+          flipReady = true;
+        };
+        img.onerror = function () { console.warn('Echo flipbook image failed'); };
+        img.src = assetUrl('assets/flame-flipbook.png');
+      }).catch(function (e) { console.warn('Echo flipbook', e); });
+    }
+
+    if (flameCanvas) {
+      flame2d = flameCanvas.getContext('2d', { alpha: false, desynchronized: true });
+    }
+    glOk = false;
+    canvas.style.background = 'transparent';
+    loadColorFlipbook();
     resize();
     setExpressionInternal(startName, true);
     if (autoOn) setAuto(true);
-    requestAnimationFrame(function (ts) {
-      last = ts;
-      requestAnimationFrame(loop);
-    });
+    blinkUntil = rand(0.8, 2.0);
+    flickerN = Math.random() * 10;
+    nextEmber = 0.05;
+    nextDrop = 0.25;
+    nextSmoke = 0.12;
+    nextTongue = 0.02;
+
+    var started = false;
+    function startLoop() {
+      if (started) return;
+      started = true;
+      ready = true;
+      requestAnimationFrame(function (ts) {
+        last = ts * 0.001;
+        requestAnimationFrame(loop);
+      });
+    }
+
+    if (glOk) startLoop();
+
+    var img = new Image();
+    img.onload = function () {
+      bodyImg = img;
+      glowCvs = makeGlow();
+      outline = extractOutline(img);
+      ready = true;
+      startLoop();
+    };
+    img.onerror = function () {
+      glowCvs = makeGlow();
+      ready = true;
+      startLoop();
+    };
+    img.src = assetUrl('assets/flame-body.png');
   })();
   </script>
 </body>

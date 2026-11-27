@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Echo">
+  <meta name="theme-color" content="#000000">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Echo face preview — a minimal wandering face.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+  <title>Echo</title>
+  <style>
+    :root {
+      --sat: env(safe-area-inset-top, 0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+      --sal: env(safe-area-inset-left, 0px);
+      --sar: env(safe-area-inset-right, 0px);
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      height: 100dvh;
+      background: #000;
+      color: #fff;
+      overflow: hidden;
+      position: fixed;
+      inset: 0;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    }
+    canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: #000;
+    }
+    #bar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 8px 10px calc(8px + var(--sab));
+      padding-left: max(10px, var(--sal));
+      padding-right: max(10px, var(--sar));
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      z-index: 2;
+      background: linear-gradient(to top, rgba(0,0,0,0.82) 40%, rgba(0,0,0,0));
+      pointer-events: none;
+    }
+    #bar > * { pointer-events: auto; }
+    body.hide-ui #bar { display: none; }
+    #autoBtn {
+      flex: 0 0 auto;
+    }
+    #pills {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      overscroll-behavior-x: contain;
+      touch-action: pan-x;
+      mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 18px), transparent);
+      -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 18px), transparent);
+    }
+    #pills::-webkit-scrollbar { display: none; }
+    button.pill {
+      appearance: none;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.84);
+      border-radius: 999px;
+      padding: 7px 11px;
+      font: 600 12px/1.15 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+      margin: 0;
+      cursor: pointer;
+    }
+    button.pill:active { transform: scale(0.97); }
+    button.pill[aria-pressed="true"] {
+      background: rgba(255,255,255,0.22);
+      border-color: rgba(255,255,255,0.28);
+      color: #fff;
+    }
+    #autoBtn[aria-pressed="true"] {
+      background: rgba(255,255,255,0.28);
+    }
+    #fps {
+      display: none;
+      position: fixed;
+      top: calc(6px + var(--sat));
+      right: max(8px, var(--sar));
+      font: 500 11px/1.2 ui-monospace, Menlo, monospace;
+      color: rgba(255,255,255,0.4);
+      z-index: 2;
+      pointer-events: none;
+    }
+    body.debug #fps { display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="c" aria-label="Echo"></canvas>
+  <div id="bar">
+    <button type="button" class="pill" id="autoBtn" aria-pressed="false">Auto</button>
+    <div id="pills" role="toolbar" aria-label="Expressions"></div>
+  </div>
+  <div id="fps"></div>
+  <script>
+  (function () {
+    'use strict';
+
+    var EXPRESSION_NAMES = [
+      'neutral', 'happy', 'veryHappy', 'laugh', 'sad', 'crying', 'angry',
+      'surprised', 'shocked', 'sleepy', 'sleeping', 'curious', 'confused',
+      'sly', 'love', 'wink', 'embarrassed', 'thinking', 'talking', 'listening'
+    ];
+
+    var LABELS = {
+      neutral: 'Neutral', happy: 'Happy', veryHappy: 'Very happy', laugh: 'Laugh',
+      sad: 'Sad', crying: 'Crying', angry: 'Angry', surprised: 'Surprised',
+      shocked: 'Shocked', sleepy: 'Sleepy', sleeping: 'Sleeping',
+      curious: 'Curious', confused: 'Confused', sly: 'Sly', love: 'Love',
+      wink: 'Wink', embarrassed: 'Embarrassed', thinking: 'Thinking',
+      talking: 'Talking', listening: 'Listening'
+    };
+
+    var ALIASES = {
+      idle: 'neutral', default: 'neutral',
+      'very-happy': 'veryHappy', veryhappy: 'veryHappy', 'very happy': 'veryHappy',
+      cry: 'crying', tears: 'crying',
+      surprise: 'surprised', shock: 'shocked',
+      sleep: 'sleeping', asleep: 'sleeping', yawn: 'sleepy',
+      smug: 'sly', smirk: 'sly',
+      hearts: 'love', heart: 'love',
+      shy: 'embarrassed', embarrassed: 'embarrassed', embarassed: 'embarrassed',
+      think: 'thinking', listen: 'listening', talk: 'talking',
+      mad: 'angry', wow: 'surprised'
+    };
+
+    function baseParams() {
+      return {
+        eyeLX: -40, eyeLY: -14, eyeLrx: 15, eyeLry: 15, eyeLrot: 0,
+        eyeLopen: 1, eyeLarc: 0, eyeLheart: 0,
+        eyeRX: 40, eyeRY: -14, eyeRrx: 15, eyeRry: 15, eyeRrot: 0,
+        eyeRopen: 1, eyeRarc: 0, eyeRheart: 0,
+        mouthX: 0, mouthY: 28, mouthW: 34, mouthThick: 8,
+        mouthCurve: 0, mouthOpen: 0, mouthSmirk: 0, mouthWobble: 0,
+        blush: 0, tilt: 0, bounceAmp: 0, shakeAmp: 0, pulseAmp: 0,
+        tear: 0, zzz: 0, dots: 0, lookBiasX: 0, lookBiasY: 0
+      };
+    }
+
+    var EXPR = {};
+    EXPR.neutral = baseParams();
+    EXPR.happy = Object.assign(baseParams(), {
+      mouthW: 42, mouthCurve: 13, mouthThick: 8
+    });
+    EXPR.veryHappy = Object.assign(baseParams(), {
+      eyeLY: -16, eyeRY: -16,
+      eyeLarc: 1, eyeRarc: 1, eyeLrx: 16, eyeRrx: 16, eyeLry: 7, eyeRry: 7,
+      mouthW: 48, mouthCurve: 17, mouthThick: 8.5, mouthY: 30
+    });
+    EXPR.laugh = Object.assign(baseParams(), {
+      eyeLY: -16, eyeRY: -16,
+      eyeLarc: 1, eyeRarc: 1, eyeLrx: 16, eyeRrx: 16, eyeLry: 7, eyeRry: 7,
+      mouthW: 50, mouthCurve: 16, mouthOpen: 0.72, mouthThick: 9, mouthY: 30,
+      bounceAmp: 1
+    });
+    EXPR.sad = Object.assign(baseParams(), {
+      eyeLY: -10, eyeRY: -10, eyeLry: 13.5, eyeRry: 13.5, eyeLrx: 15, eyeRrx: 15,
+      mouthW: 30, mouthCurve: -12, mouthY: 32, mouthThick: 7.5,
+      lookBiasY: 0.28
+    });
+    EXPR.crying = Object.assign(baseParams(), {
+      eyeLY: -9, eyeRY: -9, eyeLry: 13, eyeRry: 13,
+      mouthW: 28, mouthCurve: -13, mouthY: 33, mouthThick: 7.5,
+      lookBiasY: 0.35, tear: 1, blush: 0.5
+    });
+    EXPR.angry = Object.assign(baseParams(), {
+      eyeLY: -12, eyeRY: -12,
+      eyeLrx: 16, eyeRrx: 16, eyeLry: 7, eyeRry: 7,
+      eyeLrot: 0.48, eyeRrot: -0.48,
+      mouthW: 26, mouthCurve: -5, mouthY: 30, mouthThick: 7
+    });
+    EXPR.surprised = Object.assign(baseParams(), {
+      eyeLrx: 20, eyeLry: 20, eyeRrx: 20, eyeRry: 20,
+      eyeLY: -18, eyeRY: -18,
+      mouthX: 0, mouthY: 32, mouthW: 20, mouthThick: 22, mouthOpen: 1, mouthCurve: 0
+    });
+    EXPR.shocked = Object.assign(baseParams(), {
+      eyeLrx: 23, eyeLry: 23, eyeRrx: 23, eyeRry: 23,
+      eyeLY: -20, eyeRY: -20, eyeLX: -42, eyeRX: 42,
+      mouthW: 24, mouthThick: 26, mouthOpen: 1, mouthY: 34, mouthCurve: 0,
+      shakeAmp: 1
+    });
+    EXPR.sleepy = Object.assign(baseParams(), {
+      eyeLopen: 0.4, eyeRopen: 0.34, eyeLry: 15, eyeRry: 15,
+      eyeLY: -10, eyeRY: -10,
+      mouthW: 12, mouthThick: 22, mouthOpen: 0.85, mouthY: 30, mouthCurve: 0,
+      lookBiasY: 0.2
+    });
+    EXPR.sleeping = Object.assign(baseParams(), {
+      eyeLopen: 0, eyeRopen: 0, eyeLrx: 16, eyeRrx: 16, eyeLry: 3, eyeRry: 3,
+      eyeLY: -12, eyeRY: -12,
+      mouthW: 22, mouthThick: 6, mouthCurve: -2, mouthY: 30,
+      zzz: 1
+    });
+    EXPR.curious = Object.assign(baseParams(), {
+      eyeLrx: 14.5, eyeLry: 14.5, eyeRrx: 19, eyeRry: 19,
+      eyeLY: -14, eyeRY: -16,
+      tilt: -0.24, mouthW: 28, mouthCurve: 4, mouthThick: 7,
+      lookBiasX: 0.28, lookBiasY: -0.2
+    });
+    EXPR.confused = Object.assign(baseParams(), {
+      tilt: 0.24, mouthWobble: 1, mouthCurve: 3, mouthW: 32, mouthSmirk: 0.45,
+      eyeLry: 14, eyeRry: 16, eyeRrot: -0.12, eyeLrot: 0.08,
+      lookBiasX: -0.15
+    });
+    EXPR.sly = Object.assign(baseParams(), {
+      eyeLopen: 0.42, eyeRopen: 0.72, eyeLry: 15, eyeRry: 15,
+      mouthW: 36, mouthCurve: 11, mouthSmirk: 0.9, mouthY: 28,
+      tilt: 0.1, lookBiasX: 0.32
+    });
+    EXPR.love = Object.assign(baseParams(), {
+      eyeLheart: 1, eyeRheart: 1, eyeLrx: 17, eyeLry: 17, eyeRrx: 17, eyeRry: 17,
+      mouthW: 42, mouthCurve: 14, blush: 0.85
+    });
+    EXPR.wink = Object.assign(baseParams(), {
+      eyeLopen: 0, eyeLrx: 16, eyeLry: 3,
+      mouthW: 38, mouthCurve: 12, mouthSmirk: 0.4,
+      tilt: 0.12
+    });
+    EXPR.embarrassed = Object.assign(baseParams(), {
+      blush: 1, lookBiasX: 0.45, lookBiasY: 0.5,
+      mouthW: 24, mouthCurve: 6, mouthY: 30, mouthThick: 7,
+      eyeLopen: 0.92, eyeRopen: 0.92, tilt: 0.1
+    });
+    EXPR.thinking = Object.assign(baseParams(), {
+      lookBiasY: -0.72, lookBiasX: 0.18,
+      mouthX: 11, mouthW: 16, mouthThick: 6, mouthCurve: 3, mouthSmirk: 0.55,
+      eyeLry: 14, eyeRry: 14, dots: 1
+    });
+    EXPR.talking = Object.assign(baseParams(), {
+      mouthW: 36, mouthCurve: 5, mouthThick: 8
+    });
+    EXPR.listening = Object.assign(baseParams(), {
+      eyeLrx: 16.5, eyeLry: 16.5, eyeRrx: 16.5, eyeRry: 16.5,
+      mouthW: 30, mouthCurve: 4, mouthThick: 7, pulseAmp: 1
+    });
+
+    var HOLD = {
+      wink: [1.15, 1.7],
+      surprised: [1.35, 2.0],
+      shocked: [1.35, 2.0],
+      laugh: [2.2, 3.3],
+      sleeping: [3.6, 5.2],
+      talking: [2.8, 4.2],
+      _default: [2.6, 4.4]
+    };
+
+    function resolveName(name) {
+      if (name == null) return null;
+      var key = String(name).trim();
+      if (EXPR[key]) return key;
+      var lower = key.toLowerCase();
+      if (ALIASES[lower]) return ALIASES[lower];
+      if (EXPR[lower]) return lower;
+      return null;
+    }
+
+    var q = new URLSearchParams(location.search);
+    function flag(k) {
+      if (!q.has(k)) return false;
+      var v = q.get(k);
+      return v !== '0' && v !== 'false' && v !== 'no';
+    }
+
+    var startName = resolveName(q.get('expr')) || 'neutral';
+    var autoOn = flag('auto');
+    var stillMode = flag('still');
+    var debugOn = flag('debug');
+    var hideUi = flag('hideui') || flag('demo') || q.get('ui') === '0';
+
+    var canvas = document.getElementById('c');
+    var ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+    var fpsEl = document.getElementById('fps');
+    var barEl = document.getElementById('bar');
+    var pillsEl = document.getElementById('pills');
+    var autoBtn = document.getElementById('autoBtn');
+
+    if (debugOn) document.body.classList.add('debug');
+    if (hideUi) document.body.classList.add('hide-ui');
+
+    var dpr = 1;
+    var W = 1, H = 1, S = 1;
+    var safe = { top: 0, bottom: 0, left: 0, right: 0 };
+
+    var cur = baseParams();
+    var target = Object.assign(baseParams(), EXPR[startName]);
+    var exprName = startName;
+    var talkHeld = false;
+    var autoTimer = 0;
+    var autoHold = 3;
+
+    var pos = { x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0 };
+    var nextTarget = { x: 0, y: 0 };
+    var phase = stillMode ? 'still' : 'pause';
+    var phaseUntil = 0;
+    var lean = 0;
+    var squash = 0;
+
+    var look = { x: 0, y: 0, tx: 0, ty: 0, until: 0 };
+    var blink = 0;
+    var blinkUntil = 0;
+    var blinkState = 'open';
+    var doublePending = false;
+
+    var follow = null;
+    var pokeUntil = 0;
+    var pokeReturn = 'neutral';
+
+    var tears = [];
+    var zzzs = [];
+    var nextTear = 0;
+    var nextZzz = 0;
+
+    var time = 0;
+    var fpsAcc = 0, fpsFrames = 0, fpsVal = 60;
+
+    function lerp(a, b, t) { return a + (b - a) * t; }
+    function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+    function rand(a, b) { return a + Math.random() * (b - a); }
+    function expApproach(curV, tgt, rate, dt) {
+      return curV + (tgt - curV) * (1 - Math.exp(-rate * dt));
+    }
+
+    function readSafe() {
+      var cs = getComputedStyle(document.documentElement);
+      function px(name) { return parseFloat(cs.getPropertyValue(name)) || 0; }
+      safe.top = px('--sat');
+      safe.bottom = px('--sab');
+      safe.left = px('--sal');
+      safe.right = px('--sar');
+    }
+
+    function playable() {
+      var barH = 0;
+      if (barEl && !hideUi) barH = barEl.getBoundingClientRect().height;
+      var marginX = 108 * S;
+      var marginTop = 130 * S;
+      var marginBot = 100 * S;
+      var x0 = safe.left + 12 + marginX;
+      var y0 = safe.top + 16 + marginTop;
+      var x1 = W - safe.right - 12 - marginX;
+      var y1 = H - barH - 12 - marginBot;
+      if (x1 - x0 < 48) { x0 = W * 0.22; x1 = W * 0.78; }
+      if (y1 - y0 < 48) { y0 = H * 0.24; y1 = H * 0.62; }
+      return { x0: x0, y0: y0, x1: x1, y1: y1 };
+    }
+
+    function resize() {
+      W = window.innerWidth;
+      H = window.innerHeight;
+      dpr = Math.min(window.devicePixelRatio || 1, 3);
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+      canvas.style.width = W + 'px';
+      canvas.style.height = H + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      readSafe();
+      S = clamp(Math.min(W, H) / 430, 0.72, 1.55);
+      if (!pos.x && !pos.y) {
+        var r = playable();
+        pos.x = pos.tx = (r.x0 + r.x1) / 2;
+        pos.y = pos.ty = (r.y0 + r.y1) / 2;
+      }
+    }
+
+    function pickWanderTarget() {
+      var r = playable();
+      var x, y, tries = 0;
+      do {
+        x = rand(r.x0, r.x1);
+        y = rand(r.y0, r.y1);
+        tries++;
+      } while (Math.hypot(x - pos.x, y - pos.y) < 90 * S && tries < 8);
+      return { x: x, y: y };
+    }
+
+    function setExpressionInternal(name, fromAuto) {
+      var resolved = resolveName(name);
+      if (!resolved) return false;
+      exprName = resolved;
+      target = Object.assign(baseParams(), EXPR[resolved]);
+      if (!fromAuto) {
+        autoOn = false;
+        autoBtn.setAttribute('aria-pressed', 'false');
+      }
+      syncPill();
+      return true;
+    }
+
+    function holdRange(name) {
+      var h = HOLD[name] || HOLD._default;
+      return rand(h[0], h[1]);
+    }
+
+    function pickAutoExpression() {
+      var pool = EXPRESSION_NAMES.filter(function (n) { return n !== exprName; });
+      return pool[(Math.random() * pool.length) | 0];
+    }
+
+    function setAuto(on) {
+      autoOn = !!on;
+      autoBtn.setAttribute('aria-pressed', autoOn ? 'true' : 'false');
+      if (autoOn) {
+        autoTimer = 0;
+        autoHold = 0.4;
+      }
+    }
+
+    function syncPill() {
+      var nodes = pillsEl.querySelectorAll('button[data-expr]');
+      for (var i = 0; i < nodes.length; i++) {
+        nodes[i].setAttribute('aria-pressed', nodes[i].getAttribute('data-expr') === exprName ? 'true' : 'false');
+      }
+    }
+
+    function buildUI() {
+      EXPRESSION_NAMES.forEach(function (name) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'pill';
+        b.setAttribute('data-expr', name);
+        b.textContent = LABELS[name] || name;
+        b.addEventListener('click', function (e) {
+          e.stopPropagation();
+          setExpressionInternal(name, false);
+        });
+        pillsEl.appendChild(b);
+      });
+      autoBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        setAuto(!autoOn);
+      });
+      syncPill();
+      autoBtn.setAttribute('aria-pressed', autoOn ? 'true' : 'false');
+    }
+
+    function startBlink(now, isSecond) {
+      blinkState = 'closing';
+      blinkUntil = now + 0.055;
+      doublePending = !isSecond && Math.random() < 0.18;
+    }
+
+    function updateBlink(dt, now) {
+      if (exprName === 'sleeping' || cur.zzz > 0.7) {
+        blink = 0;
+        return;
+      }
+      if (blinkState === 'open') {
+        blink = expApproach(blink, 0, 28, dt);
+        if (now >= blinkUntil) startBlink(now, false);
+      } else if (blinkState === 'closing') {
+        blink = expApproach(blink, 1, 32, dt);
+        if (now >= blinkUntil) {
+          blinkState = 'opening';
+          blinkUntil = now + 0.08;
+        }
+      } else {
+        blink = expApproach(blink, 0, 26, dt);
+        if (now >= blinkUntil) {
+          if (doublePending) {
+            doublePending = false;
+            startBlink(now, true);
+          } else {
+            blinkState = 'open';
+            blinkUntil = now + rand(2.1, 5.4);
+          }
+        }
+      }
+    }
+
+    function updateLook(dt, now) {
+      if (follow) {
+        var dx = follow.x - pos.x;
+        var dy = follow.y - pos.y;
+        var m = Math.hypot(dx, dy) || 1;
+        look.tx = clamp(dx / (140 * S), -1, 1);
+        look.ty = clamp(dy / (140 * S), -1, 1);
+      } else if (now >= look.until) {
+        if (Math.random() < 0.22) {
+          look.tx = 0;
+          look.ty = 0;
+        } else {
+          look.tx = rand(-1, 1);
+          look.ty = rand(-0.7, 0.7);
+        }
+        look.until = now + rand(1.2, 3.4);
+      }
+      if (phase === 'move' && !follow) {
+        var sp = Math.hypot(pos.vx, pos.vy);
+        if (sp > 20) {
+          look.tx = clamp(look.tx * 0.7 + (pos.vx / 180) * 0.8, -1, 1);
+          look.ty = clamp(look.ty * 0.7 + (pos.vy / 180) * 0.8, -1, 1);
+        }
+      }
+      var ltx = clamp(look.tx + cur.lookBiasX, -1.15, 1.15);
+      var lty = clamp(look.ty + cur.lookBiasY, -1.15, 1.15);
+      look.x = expApproach(look.x, ltx, 6.5, dt);
+      look.y = expApproach(look.y, lty, 6.5, dt);
+    }
+
+    function updateMotion(dt, now) {
+      if (stillMode) {
+        var r0 = playable();
+        pos.tx = (r0.x0 + r0.x1) / 2;
+        pos.ty = (r0.y0 + r0.y1) / 2;
+      } else if (follow) {
+        phase = 'follow';
+        pos.tx = follow.x;
+        pos.ty = follow.y;
+        var bounds = playable();
+        pos.tx = clamp(pos.tx, bounds.x0, bounds.x1);
+        pos.ty = clamp(pos.ty, bounds.y0, bounds.y1);
+      } else if (phase === 'pause') {
+        pos.tx = pos.x;
+        pos.ty = pos.y;
+        if (now >= phaseUntil) {
+          nextTarget = pickWanderTarget();
+          var ang = Math.atan2(nextTarget.y - pos.y, nextTarget.x - pos.x);
+          pos.tx = pos.x - Math.cos(ang) * 16 * S;
+          pos.ty = pos.y - Math.sin(ang) * 16 * S;
+          phase = 'anticipate';
+          phaseUntil = now + 0.13;
+          squash = 0.12;
+        }
+      } else if (phase === 'anticipate') {
+        if (now >= phaseUntil) {
+          pos.tx = nextTarget.x;
+          pos.ty = nextTarget.y;
+          phase = 'move';
+        }
+      } else if (phase === 'move' || phase === 'follow') {
+        if (phase === 'move') {
+          var dist = Math.hypot(pos.tx - pos.x, pos.ty - pos.y);
+          var spd = Math.hypot(pos.vx, pos.vy);
+          if (dist < 14 * S && spd < 28) {
+            phase = 'pause';
+            phaseUntil = now + rand(0.55, 2.1);
+            pos.tx = pos.x;
+            pos.ty = pos.y;
+            squash = 0.1;
+          }
+        } else {
+          phase = 'pause';
+          phaseUntil = now + rand(0.4, 1.0);
+        }
+      }
+
+      var omega = follow ? 7.2 : (phase === 'anticipate' ? 8.5 : 3.4);
+      var zeta = follow ? 0.9 : 0.88;
+      var ax = omega * omega * (pos.tx - pos.x) - 2 * zeta * omega * pos.vx;
+      var ay = omega * omega * (pos.ty - pos.y) - 2 * zeta * omega * pos.vy;
+      pos.vx += ax * dt;
+      pos.vy += ay * dt;
+      pos.x += pos.vx * dt;
+      pos.y += pos.vy * dt;
+
+      var b = playable();
+      if (pos.x < b.x0) { pos.x = b.x0; if (pos.vx < 0) pos.vx *= -0.25; }
+      if (pos.x > b.x1) { pos.x = b.x1; if (pos.vx > 0) pos.vx *= -0.25; }
+      if (pos.y < b.y0) { pos.y = b.y0; if (pos.vy < 0) pos.vy *= -0.25; }
+      if (pos.y > b.y1) { pos.y = b.y1; if (pos.vy > 0) pos.vy *= -0.25; }
+
+      var speed = Math.hypot(pos.vx, pos.vy);
+      var leanT = (speed > 8) ? Math.atan2(pos.vy, pos.vx) * clamp(speed / 260, 0, 0.22) : 0;
+      lean = expApproach(lean, leanT, 5, dt);
+      squash = expApproach(squash, 0, 8, dt);
+    }
+
+    function approachParams(dt) {
+      var rate = 9;
+      for (var k in target) {
+        if (typeof cur[k] === 'number') cur[k] = expApproach(cur[k], target[k], rate, dt);
+      }
+    }
+
+    function talkingNow() {
+      return talkHeld || exprName === 'talking';
+    }
+
+    function spawnTear(now) {
+      var side = Math.random() < 0.7 ? -1 : 1;
+      tears.push({
+        side: side,
+        attached: true,
+        grow: 0,
+        x: 0, y: 0,
+        vx: rand(-8, 8) * S,
+        vy: 0,
+        born: now,
+        life: rand(0.85, 1.25)
+      });
+    }
+
+    function spawnZzz() {
+      zzzs.push({
+        x: rand(18, 36) * S,
+        y: rand(-36, -20) * S,
+        vx: rand(8, 18) * S,
+        vy: rand(-28, -16) * S,
+        age: 0,
+        life: rand(1.4, 2.1),
+        ch: Math.random() < 0.45 ? 'Z' : 'z',
+        rot: rand(-0.2, 0.4)
+      });
+    }
+
+    function updateEffects(dt, now) {
+      if (cur.tear > 0.4 && now >= nextTear) {
+        spawnTear(now);
+        nextTear = now + rand(0.55, 1.05);
+      }
+      if (cur.tear < 0.2) nextTear = now + 0.2;
+
+      var i, t;
+      for (i = tears.length - 1; i >= 0; i--) {
+        t = tears[i];
+        if (t.attached) {
+          t.grow = Math.min(1, t.grow + dt * 3.2);
+          if (t.grow >= 1 && now - t.born > 0.22) {
+            t.attached = false;
+            t.vy = 20 * S;
+          }
+        } else {
+          t.vy += 520 * S * dt;
+          t.x += t.vx * dt;
+          t.y += t.vy * dt;
+          if (now - t.born > t.life + 0.35) tears.splice(i, 1);
+        }
+      }
+
+      if (cur.zzz > 0.4 && now >= nextZzz) {
+        spawnZzz();
+        nextZzz = now + rand(0.55, 0.9);
+      }
+      if (cur.zzz < 0.2) nextZzz = now + 0.15;
+      for (i = zzzs.length - 1; i >= 0; i--) {
+        t = zzzs[i];
+        t.age += dt;
+        t.x += t.vx * dt;
+        t.y += t.vy * dt;
+        if (t.age > t.life) zzzs.splice(i, 1);
+      }
+    }
+
+    function updateAuto(dt) {
+      if (!autoOn) return;
+      autoTimer += dt;
+      if (autoTimer >= autoHold && pokeUntil <= time) {
+        setExpressionInternal(pickAutoExpression(), true);
+        autoTimer = 0;
+        autoHold = holdRange(exprName);
+      }
+    }
+
+    function faceRadius() {
+      return 78 * S;
+    }
+
+    /* ---------- drawing ---------- */
+
+    function heartPoint(t, rx, ry) {
+      var a = t * Math.PI * 2;
+      var hx = 16 * Math.pow(Math.sin(a), 3);
+      var hy = -(13 * Math.cos(a) - 5 * Math.cos(2 * a) - 2 * Math.cos(3 * a) - Math.cos(4 * a));
+      return { x: (hx / 16) * rx, y: (hy / 16) * ry };
+    }
+
+    function ellipsePoint(t, rx, ry) {
+      var a = t * Math.PI * 2 - Math.PI / 2;
+      return { x: Math.cos(a) * rx, y: Math.sin(a) * ry };
+    }
+
+    function arcSausagePoint(t, rx, ry, width) {
+      var Ncap = 0.18;
+      var half = width;
+      var start = Math.PI * 0.82;
+      var end = Math.PI * 0.18 + Math.PI * 2;
+      var span = end - start;
+      if (t < Ncap) {
+        var u = t / Ncap;
+        var ang = start;
+        var cx = Math.cos(start) * rx;
+        var cy = Math.sin(start) * ry;
+        var nx = Math.cos(start);
+        var ny = Math.sin(start);
+        var a0 = Math.atan2(ny, nx) + Math.PI / 2;
+        var a = a0 + u * Math.PI;
+        return { x: cx + Math.cos(a) * half, y: cy + Math.sin(a) * half };
+      }
+      if (t > 1 - Ncap) {
+        var u2 = (t - (1 - Ncap)) / Ncap;
+        var cx2 = Math.cos(end) * rx;
+        var cy2 = Math.sin(end) * ry;
+        var nx2 = Math.cos(end);
+        var ny2 = Math.sin(end);
+        var a1 = Math.atan2(ny2, nx2) - Math.PI / 2;
+        var a2 = a1 + u2 * Math.PI;
+        return { x: cx2 + Math.cos(a2) * half, y: cy2 + Math.sin(a2) * half };
+      }
+      var mid = (t - Ncap) / (1 - 2 * Ncap);
+      var outward = mid < 0.5;
+      var s = outward ? mid * 2 : (mid - 0.5) * 2;
+      var ang2 = outward ? start + s * span : end - s * span;
+      var px = Math.cos(ang2) * rx;
+      var py = Math.sin(ang2) * ry;
+      var sign = outward ? 1 : -1;
+      var nx3 = Math.cos(ang2);
+      var ny3 = Math.sin(ang2);
+      return { x: px + nx3 * half * sign, y: py + ny3 * half * sign };
+    }
+
+    function lerpPt(a, b, t) {
+      return { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) };
+    }
+
+    function drawEye(ctx, ox, oy, rx, ry, rot, open, arc, heart) {
+      var o = clamp(open, 0, 1);
+      var ryO = Math.max(1.15, ry * Math.max(o, 0.04));
+      ctx.save();
+      ctx.translate(ox, oy);
+      ctx.rotate(rot);
+
+      if (heart > 0.01) {
+        var n = 28;
+        ctx.beginPath();
+        for (var i = 0; i <= n; i++) {
+          var tt = i / n;
+          var pE = ellipsePoint(tt, rx, ryO);
+          var pH = heartPoint(tt, rx * 1.08, ryO * 1.18);
+          var p = lerpPt(pE, pH, clamp(heart, 0, 1));
+          if (i === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        }
+        ctx.closePath();
+        var pink = clamp((heart - 0.15) / 0.85, 0, 1);
+        ctx.fillStyle = 'rgb(255,' + Math.round(lerp(255, 150, pink)) + ',' + Math.round(lerp(255, 175, pink)) + ')';
+        ctx.fill();
+        ctx.restore();
+        return;
+      }
+
+      if (arc > 0.01) {
+        var tArc = clamp(arc, 0, 1);
+        var lw = lerp(ryO * 1.85, 6.4, tArc);
+        var span = lerp(0.08, rx * 0.98, Math.pow(tArc, 0.55));
+        var yEnd = lerp(0, 2.4, tArc);
+        var yCtrl = lerp(0, -Math.max(7.2, ry * 0.95), tArc);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = lw;
+        ctx.beginPath();
+        ctx.moveTo(-span, yEnd);
+        ctx.quadraticCurveTo(0, yCtrl, span, yEnd);
+        ctx.stroke();
+        ctx.restore();
+        return;
+      }
+
+      if (o < 0.08) {
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rx, Math.max(1.55, ry * 0.18), 0, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+        ctx.restore();
+        return;
+      }
+
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx, ryO, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function quadPt(p0x, p0y, p1x, p1y, p2x, p2y, t) {
+      var u = 1 - t;
+      return {
+        x: u * u * p0x + 2 * u * t * p1x + t * t * p2x,
+        y: u * u * p0y + 2 * u * t * p1y + t * t * p2y
+      };
+    }
+    function quadTan(p0x, p0y, p1x, p1y, p2x, p2y, t) {
+      return {
+        x: 2 * (1 - t) * (p1x - p0x) + 2 * t * (p2x - p1x),
+        y: 2 * (1 - t) * (p1y - p0y) + 2 * t * (p2y - p1y)
+      };
+    }
+
+    function drawMouth(ctx, p, tNow) {
+      var w = p.mouthW;
+      var thick = p.mouthThick;
+      var open = clamp(p.mouthOpen, 0, 1);
+      var curve = p.mouthCurve;
+      var smirk = p.mouthSmirk;
+      var wob = p.mouthWobble;
+      var half0 = thick / 2;
+      var half = half0 + open * Math.max(w, 24) * 0.42;
+      if (talkingNow()) {
+        var osc = 0.5 + 0.42 * Math.sin(tNow * 10.4) + 0.1 * Math.sin(tNow * 18.2);
+        var talkOpen = 0.1 + osc * 0.62;
+        if (exprName !== 'surprised' && exprName !== 'shocked' && exprName !== 'sleepy') {
+          open = Math.max(open * 0.25, talkOpen);
+          half = half0 + open * Math.max(w, 28) * 0.38;
+        }
+      }
+
+      var phaseW = tNow * 9.5;
+      var yL = smirk * 5 * S + (wob ? Math.sin(phaseW) * wob * 3.2 * S : 0);
+      var yR = -smirk * 5 * S + (wob ? Math.sin(phaseW + 2.1) * wob * 3.2 * S : 0);
+      var cY = curve * S + (wob ? Math.sin(phaseW + 1.05) * wob * 5 * S : 0);
+      var cX = smirk * 4 * S;
+
+      var x0 = -w / 2, x2 = w / 2;
+      var hole = clamp(open, 0, 1);
+
+      ctx.save();
+      ctx.translate(p.mouthX, p.mouthY);
+      ctx.fillStyle = '#fff';
+
+      if (Math.abs(curve) < 0.35 && Math.abs(smirk) < 0.05 && wob < 0.05) {
+        var rx = Math.max(half, w / 2);
+        var ry = half;
+        if (w > 2) rx = w / 2 + half0 * (1 - hole * 0.15);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, Math.max(rx, 1.5), Math.max(ry, 1.5), 0, 0, Math.PI * 2);
+        if (hole > 0.08) {
+          var irx = rx * hole * 0.72;
+          var iry = ry * hole * 0.72;
+          if (irx > 1.2 && iry > 1.2) {
+            ctx.ellipse(0, 0, irx, iry, 0, 0, Math.PI * 2);
+            ctx.fill('evenodd');
+          } else {
+            ctx.fill();
+          }
+        } else {
+          ctx.fill();
+        }
+        ctx.restore();
+        return;
+      }
+
+      function trace(halfW, shrink) {
+        var N = 18;
+        var sx = shrink, sy = shrink;
+        var ptsL = [];
+        var ptsR = [];
+        for (var i = 0; i <= N; i++) {
+          var t = i / N;
+          var pt = quadPt(x0, yL, cX, cY, x2, yR, t);
+          var tg = quadTan(x0, yL, cX, cY, x2, yR, t);
+          var len = Math.hypot(tg.x, tg.y) || 1;
+          var nx = -tg.y / len, ny = tg.x / len;
+          ptsL.push([pt.x * sx + nx * halfW, pt.y * sy + ny * halfW]);
+          ptsR.push([pt.x * sx - nx * halfW, pt.y * sy - ny * halfW]);
+        }
+        var start = quadPt(x0, yL, cX, cY, x2, yR, 0);
+        var end = quadPt(x0, yL, cX, cY, x2, yR, 1);
+        var t0 = quadTan(x0, yL, cX, cY, x2, yR, 0);
+        var t1 = quadTan(x0, yL, cX, cY, x2, yR, 1);
+        var a0 = Math.atan2(t0.y, t0.x);
+        var a1 = Math.atan2(t1.y, t1.x);
+        ctx.moveTo(ptsL[0][0], ptsL[0][1]);
+        for (var j = 1; j < ptsL.length; j++) ctx.lineTo(ptsL[j][0], ptsL[j][1]);
+        ctx.arc(end.x * sx, end.y * sy, halfW, a1 - Math.PI / 2, a1 + Math.PI / 2);
+        for (var k = ptsR.length - 1; k >= 0; k--) ctx.lineTo(ptsR[k][0], ptsR[k][1]);
+        ctx.arc(start.x * sx, start.y * sy, halfW, a0 + Math.PI / 2, a0 - Math.PI / 2);
+        ctx.closePath();
+      }
+
+      ctx.beginPath();
+      trace(Math.max(half, 1.6 * S), 1);
+      if (hole > 0.1) {
+        var innerH = Math.max(1, half * hole * 0.62);
+        trace(innerH, 0.82);
+        ctx.fill('evenodd');
+      } else {
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function drawTearDrop(ctx, x, y, s) {
+      ctx.beginPath();
+      ctx.moveTo(x, y - s);
+      ctx.bezierCurveTo(x + s * 0.62, y - s * 0.15, x + s * 0.62, y + s * 0.45, x, y + s);
+      ctx.bezierCurveTo(x - s * 0.62, y + s * 0.45, x - s * 0.62, y - s * 0.15, x, y - s);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(168, 210, 255, 0.95)';
+      ctx.fill();
+    }
+
+    function drawFace(dtAlready, now) {
+      var breathe = 1 + Math.sin(now * 1.45) * 0.018;
+      var pulse = 1 + (cur.pulseAmp > 0.05 ? Math.sin(now * 2.4) * 0.035 * cur.pulseAmp : 0);
+      var bounce = cur.bounceAmp > 0.05 ? -Math.abs(Math.sin(now * 8.6)) * cur.bounceAmp * 16 * S : 0;
+      var bounceSq = cur.bounceAmp > 0.05 ? Math.cos(now * 8.6) * cur.bounceAmp * 0.08 : 0;
+      var shakeX = cur.shakeAmp > 0.05 ? Math.sin(now * 58) * cur.shakeAmp * 3.2 * S : 0;
+      var shakeY = cur.shakeAmp > 0.05 ? Math.cos(now * 51) * cur.shakeAmp * 2.2 * S : 0;
+
+      var speed = Math.hypot(pos.vx, pos.vy);
+      var stretch = clamp(speed * 0.00055, 0, 0.2);
+      var vAng = Math.atan2(pos.vy, pos.vx);
+
+      var lx = look.x;
+      var ly = look.y;
+      var shiftX = lx * 11 * S;
+      var shiftY = ly * 8 * S;
+      var near = 1 + Math.abs(lx) * 0.05;
+      var far = 1 - Math.abs(lx) * 0.08;
+      var lScale = lx >= 0 ? far : near;
+      var rScale = lx >= 0 ? near : far;
+
+      ctx.save();
+      ctx.translate(pos.x + shakeX, pos.y + bounce + shakeY);
+      ctx.rotate(lean + cur.tilt);
+      if (stretch > 0.002) {
+        ctx.rotate(vAng);
+        ctx.scale(1 + stretch, 1 / (1 + stretch));
+        ctx.rotate(-vAng);
+      }
+      var sq = 1 - squash - (bounceSq > 0 ? bounceSq : 0) * 0.5;
+      var sy = (1 + squash * 0.4 + Math.max(0, -bounceSq)) * breathe * pulse;
+      var sx = (1 / Math.max(0.72, sq)) * breathe * pulse;
+      ctx.scale(sx, sy);
+
+      ctx.scale(S, S);
+      ctx.translate(shiftX / S, shiftY / S);
+
+      if (cur.blush > 0.02) {
+        var ba = 0.82 * cur.blush;
+        ctx.fillStyle = 'rgba(255, 158, 180,' + ba + ')';
+        ctx.beginPath();
+        ctx.ellipse(-56, 16, 18, 11, 0, 0, Math.PI * 2);
+        ctx.ellipse(56, 16, 18, 11, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255, 190, 205,' + (0.45 * cur.blush) + ')';
+        ctx.beginPath();
+        ctx.ellipse(-56, 16, 11, 7, 0, 0, Math.PI * 2);
+        ctx.ellipse(56, 16, 11, 7, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      var bL = blink;
+      var bR = blink;
+      if (cur.eyeLopen < 0.08) bL = 0;
+      if (cur.eyeRopen < 0.08) bR = 0;
+      var oL = clamp(cur.eyeLopen * (1 - bL), 0, 1);
+      var oR = clamp(cur.eyeRopen * (1 - bR), 0, 1);
+
+      drawEye(ctx, cur.eyeLX * lScale, cur.eyeLY, cur.eyeLrx * lScale, cur.eyeLry * lScale,
+        cur.eyeLrot, oL, cur.eyeLarc, cur.eyeLheart);
+      drawEye(ctx, cur.eyeRX * rScale, cur.eyeRY, cur.eyeRrx * rScale, cur.eyeRry * rScale,
+        cur.eyeRrot, oR, cur.eyeRarc, cur.eyeRheart);
+
+      var mp = {
+        mouthX: cur.mouthX, mouthY: cur.mouthY,
+        mouthW: cur.mouthW, mouthThick: cur.mouthThick,
+        mouthCurve: cur.mouthCurve, mouthOpen: cur.mouthOpen,
+        mouthSmirk: cur.mouthSmirk, mouthWobble: cur.mouthWobble
+      };
+      drawMouth(ctx, mp, now);
+
+      if (cur.dots > 0.05) {
+        var da = cur.dots;
+        for (var d = 0; d < 3; d++) {
+          var ph = now * 4.2 - d * 0.45;
+          var yy = -42 - Math.max(0, Math.sin(ph)) * 5;
+          var xx = 54 + d * 12;
+          var rad = 2.6 + Math.max(0, Math.sin(ph)) * 0.7;
+          ctx.beginPath();
+          ctx.arc(xx, yy, rad, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,255,255,' + (0.85 * da) + ')';
+          ctx.fill();
+        }
+      }
+
+      /* attached tears in face space */
+      var ti;
+      for (ti = 0; ti < tears.length; ti++) {
+        var tr = tears[ti];
+        if (!tr.attached) continue;
+        var ex = tr.side < 0 ? cur.eyeLX * lScale : cur.eyeRX * rScale;
+        var ey = (tr.side < 0 ? cur.eyeLY : cur.eyeRY) + (tr.side < 0 ? cur.eyeLry : cur.eyeRry) * 0.85;
+        var ts = (5 + tr.grow * 4);
+        tr._fx = ex; tr._fy = ey + 6 + tr.grow * 4;
+        drawTearDrop(ctx, tr._fx, tr._fy, ts);
+      }
+
+      ctx.restore();
+
+      /* world-space falling tears + zzz */
+      ctx.save();
+      for (ti = 0; ti < tears.length; ti++) {
+        var tr2 = tears[ti];
+        if (tr2.attached) {
+          /* convert last face-local to a spawn world pos once detached next frame */
+          tr2._wx = pos.x + shakeX;
+          tr2._wy = pos.y + bounce + shakeY;
+          continue;
+        }
+        if (tr2.wx == null && tr2._fx != null) {
+          /* approximate: start from face origin + local (ignore rot for simplicity if just detached) */
+          var ca = Math.cos(lean + cur.tilt), sa = Math.sin(lean + cur.tilt);
+          var lx2 = tr2._fx * S, ly2 = tr2._fy * S;
+          tr2.wx = pos.x + lx2 * ca - ly2 * sa;
+          tr2.wy = pos.y + lx2 * sa + ly2 * ca;
+          tr2.x = 0; tr2.y = 0;
+        }
+        if (tr2.wx == null) continue;
+        var age = now - tr2.born;
+        var fade = age > tr2.life ? 1 - (age - tr2.life) / 0.35 : 1;
+        ctx.globalAlpha = clamp(fade, 0, 1);
+        drawTearDrop(ctx, tr2.wx + tr2.x, tr2.wy + tr2.y, 8 * S);
+        ctx.globalAlpha = 1;
+      }
+
+      var faceTop = pos.y - 36 * S;
+      var faceRight = pos.x + 22 * S;
+      ctx.font = '600 ' + Math.round(18 * S) + 'px -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      for (var zi = 0; zi < zzzs.length; zi++) {
+        var z = zzzs[zi];
+        var za = z.age / z.life;
+        var alpha = z.age < 0.15 ? z.age / 0.15 : (za > 0.7 ? (1 - za) / 0.3 : 1);
+        alpha *= cur.zzz;
+        ctx.save();
+        ctx.globalAlpha = clamp(alpha, 0, 1);
+        ctx.translate(faceRight + z.x, faceTop + z.y);
+        ctx.rotate(z.rot + za * 0.3);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(z.ch, 0, 0);
+        ctx.restore();
+      }
+      ctx.restore();
+
+      if (cur.pulseAmp > 0.2) {
+        var pr = (62 + (now * 0.55 % 1) * 28) * S * pulse;
+        var pa = (1 - (now * 0.55 % 1)) * 0.14 * cur.pulseAmp;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, pr, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,' + pa + ')';
+        ctx.lineWidth = 1.5 * S;
+        ctx.stroke();
+      }
+    }
+
+    function update(dt, now) {
+      time = now;
+      if (pokeUntil && now > pokeUntil) {
+        pokeUntil = 0;
+        if (autoOn) {
+          /* auto will pick next shortly */
+        } else {
+          setExpressionInternal(pokeReturn, true);
+        }
+      }
+      approachParams(dt);
+      updateMotion(dt, now);
+      updateLook(dt, now);
+      updateBlink(dt, now);
+      updateEffects(dt, now);
+      updateAuto(dt);
+    }
+
+    function draw(now) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+      drawFace(0, now);
+    }
+
+    var last = performance.now();
+    function loop(ts) {
+      var now = ts / 1000;
+      var dt = (ts - last) / 1000;
+      last = ts;
+      if (dt > 0.05) dt = 0.05;
+      update(dt, now);
+      draw(now);
+      fpsAcc += dt;
+      fpsFrames++;
+      if (fpsAcc >= 0.5) {
+        fpsVal = fpsFrames / fpsAcc;
+        fpsAcc = 0;
+        fpsFrames = 0;
+        if (debugOn) fpsEl.textContent = Math.round(fpsVal) + ' fps';
+      }
+      requestAnimationFrame(loop);
+    }
+
+    function clientPoint(ev) {
+      if (ev.touches && ev.touches[0]) return { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
+      return { x: ev.clientX, y: ev.clientY };
+    }
+
+    var pointerDown = false;
+    var pointerId = null;
+    var downAt = 0;
+    var downPt = { x: 0, y: 0 };
+    var moved = false;
+
+    function onDown(ev) {
+      if (ev.target && ev.target.closest && ev.target.closest('#bar')) return;
+      var p = clientPoint(ev);
+      pointerDown = true;
+      moved = false;
+      downAt = time;
+      downPt = p;
+      if (ev.pointerId != null) {
+        pointerId = ev.pointerId;
+        try { canvas.setPointerCapture(ev.pointerId); } catch (e) {}
+      }
+      var dist = Math.hypot(p.x - pos.x, p.y - pos.y);
+      if (dist < faceRadius() * 1.15) {
+        pokeReturn = exprName === 'surprised' ? 'neutral' : exprName;
+        setExpressionInternal('surprised', true);
+        pokeUntil = time + 0.85;
+        var ang = Math.atan2(pos.y - p.y, pos.x - p.x);
+        pos.vx += Math.cos(ang) * 220 * S;
+        pos.vy += Math.sin(ang) * 220 * S;
+        squash = 0.16;
+      } else {
+        look.tx = clamp((p.x - pos.x) / (140 * S), -1, 1);
+        look.ty = clamp((p.y - pos.y) / (140 * S), -1, 1);
+        look.until = time + 2.2;
+        if (!stillMode) {
+          var b = playable();
+          pos.tx = clamp(p.x, b.x0, b.x1);
+          pos.ty = clamp(p.y, b.y0, b.y1);
+          phase = 'move';
+        }
+      }
+    }
+
+    function onMove(ev) {
+      if (!pointerDown) return;
+      var p = clientPoint(ev);
+      if (Math.hypot(p.x - downPt.x, p.y - downPt.y) > 8) moved = true;
+      if (moved || time - downAt > 0.12) {
+        if (!stillMode) follow = { x: p.x, y: p.y };
+        look.tx = clamp((p.x - pos.x) / (140 * S), -1, 1);
+        look.ty = clamp((p.y - pos.y) / (140 * S), -1, 1);
+      }
+    }
+
+    function onUp(ev) {
+      if (!pointerDown) return;
+      pointerDown = false;
+      pointerId = null;
+      follow = null;
+      if (!stillMode && phase === 'follow') {
+        phase = 'pause';
+        phaseUntil = time + rand(0.4, 1.1);
+      }
+    }
+
+    canvas.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    window.addEventListener('blur', onUp);
+
+    document.addEventListener('touchmove', function (e) {
+      if (e.target && e.target.closest && e.target.closest('#pills')) return;
+      e.preventDefault();
+    }, { passive: false });
+
+    window.addEventListener('resize', resize);
+    window.addEventListener('orientationchange', function () { setTimeout(resize, 80); });
+
+    window.echoFace = {
+      setExpression: function (name) { return setExpressionInternal(name, false); },
+      talk: function (on) { talkHeld = !!on; },
+      setAuto: function (on) { setAuto(on); },
+      getExpression: function () { return exprName; },
+      expressions: EXPRESSION_NAMES.slice()
+    };
+
+    buildUI();
+    resize();
+    setExpressionInternal(startName, true);
+    if (autoOn) setAuto(true);
+    requestAnimationFrame(function (ts) {
+      last = ts;
+      requestAnimationFrame(loop);
+    });
+  })();
+  </script>
+</body>
+</html>

@@ -1,21 +1,23 @@
-# Echo Face
+# Echo
 
-A minimal wandering face for Echo: two white eyes and a short rounded mouth on a black screen, with organic motion and twenty expressions. One self-contained page, built for iPhone Safari and Add to Home Screen. No build step, no libraries, no API keys.
+Echo as a lively flame spirit: a painted fire body with a hollow-cutout face, on a black screen, built for iPhone Safari and Add to Home Screen. One self-contained page. No build step, no libraries, no API keys.
 
-**Preview:** https://wirawibawa2-cmd.github.io/echo-face/?v=2
+**Live:** https://wirawibawa2-cmd.github.io/echo-face/?v=7
 
-This is a standalone project. It is not Kira, and it is not the live Echo app.
+This is a standalone project. It is not Kira, and it is not the other Echo app repo.
+
+The previous minimal white-face page is archived at [`archive/minimal-face/`](archive/minimal-face/). A working copy of this flame build also stays at [`/preview/`](preview/).
 
 ## Open it
 
-- Browser: use the preview URL, or serve this folder with any static server and open `index.html`.
+- Browser: use the live URL, or serve this folder with any static server and open `index.html`.
 - iPhone: open in Safari, then Share → Add to Home Screen.
 
 Query flags: `?auto=1` starts Auto mode, `?debug=1` shows FPS, `?still=1&expr=happy` pins a pose, `?demo=1` hides the control bar.
 
 ## Controls
 
-The translucent row at the bottom triggers expressions. **Auto** cycles them at random while Echo wanders, pauses, looks around, blinks, and reacts to taps (look, follow, or a surprised poke).
+Echo stays in the center of the screen. The flame is a flipbook of the reference fire, and the face is drawn in a hollow-cutout style. The row at the bottom sets an expression. **Auto** cycles the 12 faces at random. Blinks, look-around, and tap flares keep him alive.
 
 ## App API
 
@@ -27,4 +29,6 @@ window.echoFace.getExpression()
 window.echoFace.expressions
 ```
 
-Expressions: `neutral`, `happy`, `veryHappy`, `laugh`, `sad`, `crying`, `angry`, `surprised`, `shocked`, `sleepy`, `sleeping`, `curious`, `confused`, `sly`, `love`, `wink`, `embarrassed`, `thinking`, `talking`, `listening`.
+Pills: `happy`, `sad`, `veryHappy`, `wavy`, `content`, `disappointed`, `angry`, `dizzy`, `squint`, `wink`, `unamused`, `worried`.
+
+API-only (no pill): `neutral`, `talking`.
