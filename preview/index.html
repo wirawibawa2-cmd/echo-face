@@ -256,6 +256,12 @@
     var stillMode = flag('still');
     var debugOn = flag('debug');
     var hideUi = flag('hideui') || flag('demo') || q.get('ui') === '0';
+    var holdFps = flag('smooth') ? 0 : (parseFloat(q.get('hold')) || 22);
+    var flipMeta = null;
+    var flipReady = false;
+    var flipTex = null;
+    var flipCumul = [];
+    var flipTotal = 1;
 
     var canvas = document.getElementById('c');
     var ctx = canvas.getContext('2d', { alpha: true, desynchronized: true });
@@ -385,6 +391,14 @@
       'uniform float uAngle;',
       'uniform float uTime;',
       'uniform float uFlare;',
+      'uniform float uHold;',
+      'uniform sampler2D uAtlas;',
+      'uniform float uUseAtlas;',
+      'uniform float uFrame;',
+      'uniform vec4 uGrid;',
+      'uniform vec2 uFacePx;',
+      'uniform float uPx;',
+      'uniform float uSdfRange;',
       '',
       'float hash12(vec2 p){',
       '  vec2 q = fract(p * vec2(0.1031, 0.1030));',
@@ -431,77 +445,92 @@
       '',
       'float sdFlame(vec2 p, float t){',
       '  vec2 c = vec2(0.0, -0.06);',
-      '  float rx = 1.14 + 0.16 * n2(t * 1.85, 0.4).x + 0.08 * uFlare;',
-      '  float ry = 1.08 + 0.12 * n2(t * 1.45, 1.9).y;',
-      '  vec2 e = vec2(rx, ry);',
+      '  // Slow breathing: lower body bulges out as it squashes, then reaches up.',
+      '  float breath = sin(t * 2.05);',
+      '  float bulge = 1.0 + 0.11 * breath + 0.06 * uFlare;',
+      '  float squat = 1.0 - 0.09 * breath;',
+      '  vec2 q = p - c;',
+      '  float low = 1.0 - smoothstep(-0.15, 0.85, q.y);',
+      '  q.x /= mix(1.0, bulge, low);',
+      '  q.y /= mix(1.0, squat, low * 0.85);',
       '',
-      '  vec2 b1 = c + n2(t * 1.55, 2.0) * vec2(0.20, 0.16);',
-      '  vec2 b2 = c + vec2(-0.46, 0.08) + n2(t * 2.15, 3.2) * vec2(0.18, 0.16);',
-      '  vec2 b3 = c + vec2( 0.47, 0.04) + n2(t * 2.05, 5.1) * vec2(0.18, 0.16);',
-      '  vec2 b4 = c + vec2( 0.06,-0.64) + n2(t * 1.75, 6.8) * vec2(0.26, 0.22);',
-      '  vec2 b5 = c + vec2(-0.08, 0.55) + n2(t * 1.95, 8.3) * vec2(0.28, 0.24);',
-      '  float sd = length((p - b1) / e) * min(rx, ry) - 0.92;',
-      '  sd = smin(sd, length(p - b2) - 0.66, 0.18);',
-      '  sd = smin(sd, length(p - b3) - 0.64, 0.18);',
-      '  sd = smin(sd, length(p - b4) - 0.60, 0.16);',
-      '  sd = smin(sd, length(p - b5) - 0.54, 0.16);',
+      '  // Multi-octave domain warp scrolling upward so the whole silhouette churns.',
+      '  vec2 ns = vec2(q.x * 1.85, q.y * 1.65 - t * 2.55);',
+      '  vec2 w1 = vec2(fbm(ns), fbm(ns + vec2(5.2, -t * 0.28))) - 0.5;',
+      '  ns += w1 * (0.48 + 0.22 * uFlare);',
+      '  vec2 w2 = vec2(fbm(ns * 2.15 + 8.0), fbm(ns * 2.15 + 17.0 - t * 0.12)) - 0.5;',
+      '  ns += w2 * 0.24;',
+      '  float n = fbm(ns * 1.75);',
+      '  float nFine = fbm(ns * 3.35 + vec2(3.0, t * 0.45));',
       '',
-      '  // Boil the outline. Keep the bulb compact; spend the wild motion on the crown.',
-      '  float ang = atan(p.y - c.y, p.x - c.x);',
-      '  float hw = smoothstep(-0.15, 1.05, p.y);',
-      '  sd -= (vnoise(vec2(ang * 1.6 + t * 0.8, t * 1.9)) - 0.5) * (0.07 + 0.12 * hw);',
-      '  sd -= (vnoise(vec2(ang * 3.1 - t * 1.4, t * 2.4 + 3.0)) - 0.5) * (0.04 + 0.08 * hw);',
+      '  float rx = 1.12 + 0.07 * uFlare;',
+      '  float ry = 1.08;',
+      '  float sd = length(q / vec2(rx, ry)) * min(rx, ry) - 0.94;',
+      '  // Soft side lumps, also advected by the warp so they do not orbit in place.',
+      '  vec2 b2 = vec2(-0.48, 0.06) + w1 * 0.16;',
+      '  vec2 b3 = vec2( 0.50, 0.02) + vec2(-w1.y, w1.x) * 0.16;',
+      '  sd = smin(sd, length(q - b2) - 0.58, 0.16);',
+      '  sd = smin(sd, length(q - b3) - 0.56, 0.16);',
       '',
-      '  // One dominant curling tongue, sometimes split at the tip.',
-      '  vec2 sw = n2(t * 2.55, 14.0);',
-      '  vec2 sw2 = n2(t * 3.15, 16.0);',
-      '  float stretch = 0.22 + 1.05 * pow(0.35 + 0.65 * fbm(vec2(t * 1.25, 18.0)), 1.15) + 0.20 * uFlare;',
-      '  vec2 base = c + vec2(sw.x * 0.38, ry * 0.62 + 0.10);',
-      '  vec2 mid  = base + vec2(sw.x * 0.85, stretch * 0.50);',
-      '  vec2 tip  = mid  + vec2(sw.x * 0.50 + sw2.x * 0.95, stretch * 0.58 - abs(sw2.x) * 0.28);',
-      '  float tt = clamp((p.y - base.y) / max(tip.y - base.y, 0.05), 0.0, 1.0);',
-      '  float tw = mix(0.34 + 0.08 * uFlare, 0.05, pow(tt, 0.80));',
-      '  float tongue = smin(',
-      '    sdCapsule(p, base, mid, tw * 1.05),',
-      '    sdCapsule(p, mid, tip, mix(tw, 0.045, 0.75)),',
-      '    0.12);',
-      '  float splitOn = smoothstep(0.50, 0.70, fbm(vec2(t * 1.05, 21.0))) * smoothstep(0.75, 1.10, stretch);',
-      '  vec2 tipB = mid + vec2(-sw2.x * 0.80, stretch * 0.40);',
-      '  float split = sdCapsule(p, mid, tipB, mix(tw * 0.7, 0.04, 0.7));',
-      '  split += (1.0 - splitOn) * 0.85;',
-      '  tongue = smin(tongue, split, 0.10);',
-      '  sd = smin(sd, tongue, 0.16);',
-      '  if (p.y > 0.45) {',
-      '    sd -= (vnoise(vec2(p.x * 4.2, p.y * 3.1 + t * 2.0)) - 0.5) * 0.07;',
+      '  float hw = smoothstep(-0.20, 1.20, q.y);',
+      '  sd -= (n - 0.48) * (0.11 + 0.36 * hw * hw + 0.08 * low + 0.10 * uFlare);',
+      '  sd -= (nFine - 0.5) * (0.05 + 0.14 * hw);',
+      '  float ang = atan(q.y, q.x);',
+      '  sd -= (vnoise(vec2(ang * 1.7, q.y * 1.3 - t * 2.15)) - 0.5) * (0.07 + 0.16 * hw);',
+      '',
+      '  // Two or three tongues that grow, sway, change shape, and pinch off.',
+      '  vec2 mainTip = vec2(0.0, 1.35);',
+      '  for (int i = 0; i < 3; i++) {',
+      '    float fi = float(i);',
+      '    float spd = 0.52 + 0.16 * fi;',
+      '    float ph = fract(t * spd + fi * 0.37);',
+      '    float env = smoothstep(0.02, 0.18, ph) * (1.0 - smoothstep(0.52, 0.82, ph));',
+      '    if (i == 2) env *= smoothstep(0.35, 0.62, fbm(vec2(floor(t * spd + fi * 0.37), 21.0)));',
+      '    float len = 0.18 + (0.55 + 0.40 * (1.0 - 0.35 * fi) + 0.18 * uFlare) * env;',
+      '    vec2 sw = n2(t * (2.35 + 0.28 * fi) + fi, 14.0 + fi);',
+      '    vec2 hk = n2(t * (3.05 + 0.2 * fi) + fi * 2.0, 20.0 + fi);',
+      '    vec2 base = vec2((-0.22 + 0.22 * fi) + sw.x * 0.20, ry * 0.52);',
+      '    vec2 mid  = base + vec2(sw.x * (0.45 + 0.40 * env), len * 0.46);',
+      '    vec2 tip  = mid  + vec2(sw.x * 0.35 + hk.x * 0.85 * env, len * 0.56 - abs(hk.x) * 0.28 * env);',
+      '    if (i == 0) mainTip = tip + c;',
+      '    float tt = clamp((q.y - base.y) / max(tip.y - base.y, 0.04), 0.0, 1.0);',
+      '    float tw = mix(0.30 + 0.06 * uFlare, 0.035, pow(tt, 0.78)) * (0.45 + 0.55 * env);',
+      '    float tongue = smin(',
+      '      sdCapsule(q, base, mid, tw * 1.05),',
+      '      sdCapsule(q, mid, tip, mix(tw, 0.04, 0.7)),',
+      '      0.11);',
+      '    tongue -= (vnoise(vec2(q.x * 4.0, q.y * 3.0 - t * 2.3) + fi) - 0.5) * 0.06 * env;',
+      '    sd = smin(sd, tongue, 0.14);',
       '  }',
       '',
-      '  // Hanging drips — thin, irregular, mixed lengths.',
+      '  // Hanging drips at varied speeds — some linger, one stretches far.',
       '  for (int i = 0; i < 4; i++) {',
       '    float fi = float(i);',
-      '    vec2 dn = n2(t * (0.7 + 0.11 * fi), 30.0 + fi);',
-      '    float phase = pow(0.5 + 0.5 * sin(t * (1.05 + 0.23 * fi) + fi * 1.7), 1.65);',
-      '    float len = 0.12 + (0.28 + 0.18 * fi) * phase * (0.55 + 0.45 * (dn.y + 0.5));',
-      '    if (i == 1) len += 0.22 * phase;',
-      '    float dx = -0.48 + 0.32 * fi + dn.x * 0.16;',
-      '    vec2 da = c + vec2(dx, -ry * 0.82);',
-      '    vec2 db = da + vec2(dn.x * 0.12 * len, -len);',
-      '    float rad = mix(0.085, 0.022, phase) * (i == 2 ? 0.65 : 1.0);',
-      '    sd = smin(sd, sdCapsule(p, da, db, rad), 0.07);',
+      '    vec2 dn = n2(t * (0.55 + 0.33 * fi), 30.0 + fi);',
+      '    float phase = pow(0.5 + 0.5 * sin(t * (0.70 + 0.48 * fi) + fi * 1.7), 1.45 + 0.3 * fi);',
+      '    float len = 0.10 + (0.22 + 0.20 * fi) * phase * (0.50 + 0.50 * (dn.y + 0.5));',
+      '    if (i == 1) len += 0.28 * phase;',
+      '    float dx = -0.48 + 0.32 * fi + dn.x * 0.18;',
+      '    vec2 da = vec2(dx, -ry * 0.80 * squat);',
+      '    vec2 db = da + vec2(dn.x * 0.14 * len, -len);',
+      '    float rad = mix(0.085, 0.020, phase) * (i == 2 ? 0.62 : 1.0);',
+      '    sd = smin(sd, sdCapsule(q, da, db, rad), 0.07);',
       '  }',
       '',
-      '  // Detached blobs rising off the tip.',
-      '  for (int j = 0; j < 4; j++) {',
+      '  // Blobs pinch off a tongue tip, then rise, shrink and fade.',
+      '  for (int j = 0; j < 5; j++) {',
       '    float fj = float(j);',
-      '    float life = 0.80 + 0.22 * fj;',
-      '    float cycle = t / life + fj * 0.27;',
+      '    float life = 0.55 + 0.38 * fj;',
+      '    float cycle = t / life + fj * 0.23;',
       '    float ph = fract(cycle);',
       '    vec2 jn = n2(floor(cycle) * 1.7, 40.0 + fj);',
-      '    vec2 birth = tip + vec2(jn.x * 0.28, 0.04);',
-      '    vec2 bp = birth + vec2(jn.x * 0.50, ph * (0.85 + 0.40 * fj));',
-      '    float br = mix(0.17, 0.025, ph) * smoothstep(0.0, 0.10, ph) * (1.0 - smoothstep(0.58, 1.0, ph));',
-      '    // Slightly squashed, not a perfect circle.',
-      '    vec2 ep = (p - bp) / vec2(1.0 + jn.x * 0.35, 1.20 + 0.25 * ph);',
-      '    ep.x += (vnoise(ep * 3.5 + fj) - 0.5) * 0.18;',
+      '    // Appear as the matching tongue retracts, then float up.',
+      '    vec2 birth = mainTip - c + vec2(jn.x * 0.30, 0.02);',
+      '    if (j > 0) birth.x += (fj - 2.0) * 0.10;',
+      '    vec2 bp = birth + vec2(jn.x * (0.35 + 0.25 * ph) + jn.y * 0.12, ph * (0.95 + 0.55 * fj));',
+      '    float br = mix(0.16, 0.02, ph) * smoothstep(0.0, 0.10, ph) * (1.0 - smoothstep(0.55, 1.0, ph));',
+      '    vec2 ep = (q - bp) / vec2(1.0 + jn.x * 0.40, 1.15 + 0.35 * ph);',
+      '    ep.x += (vnoise(ep * 3.4 + fj + t * 0.2) - 0.5) * 0.20;',
       '    sd = min(sd, length(ep) - br);',
       '  }',
       '  return sd;',
@@ -515,7 +544,20 @@
       '  vec2 p = vec2(r.x / max(uScale.x, 0.001), -r.y / max(uScale.y, 0.001));',
       '  p /= 102.0;',
       '  float t = uTime;',
-      '  float ts = floor(t * 22.0 + 0.001) / 22.0;',
+      '  // uHold is a hold rate in fps (22 ~= the reference GIF). 0 = smooth time.',
+      '  float ts = (uHold > 0.5) ? floor(t * uHold + 0.001) / uHold : t;',
+      '',
+      '  float sdA = 8.0;',
+      '  if (uUseAtlas > 0.5) {',
+      '    float col = mod(uFrame, uGrid.z);',
+      '    float row = floor(uFrame / uGrid.z);',
+      '    vec2 cellP = uFacePx + vec2(p.x, -p.y) * uPx;',
+      '    if (cellP.x > 1.0 && cellP.y > 1.0 && cellP.x < uGrid.x - 1.0 && cellP.y < uGrid.y - 1.0) {',
+      '      vec2 uv = (vec2(col, row) * uGrid.xy + cellP) / uGrid.w;',
+      '      float enc = texture2D(uAtlas, uv).r;',
+      '      sdA = (enc > 0.98) ? 8.0 : (enc - 0.5) * 2.0 * uSdfRange / max(uPx, 0.001);',
+      '    }',
+      '  }',
       '',
       '  vec3 bodyA = vec3(0.761, 0.255, 0.047);',  // #c2410c
       '  vec3 bodyB = vec3(0.918, 0.345, 0.047);',  // #ea580c
@@ -528,7 +570,7 @@
       '  vec3 smokeC= vec3(0.30,  0.24,  0.21);',
       '',
       '  float dist = length(p);',
-      '  float sd = sdFlame(p, ts);',
+      '  float sd = (uUseAtlas > 0.5) ? sdA : sdFlame(p, ts);',
       '  float fire = smoothstep(0.016, -0.007, sd);',
       '',
       '  // Deep orange body, slightly darker toward the face. No flat white fill.',
@@ -627,6 +669,14 @@
       glUni.uAngle = gl.getUniformLocation(glProg, 'uAngle');
       glUni.uTime = gl.getUniformLocation(glProg, 'uTime');
       glUni.uFlare = gl.getUniformLocation(glProg, 'uFlare');
+      glUni.uHold = gl.getUniformLocation(glProg, 'uHold');
+      glUni.uAtlas = gl.getUniformLocation(glProg, 'uAtlas');
+      glUni.uUseAtlas = gl.getUniformLocation(glProg, 'uUseAtlas');
+      glUni.uFrame = gl.getUniformLocation(glProg, 'uFrame');
+      glUni.uGrid = gl.getUniformLocation(glProg, 'uGrid');
+      glUni.uFacePx = gl.getUniformLocation(glProg, 'uFacePx');
+      glUni.uPx = gl.getUniformLocation(glProg, 'uPx');
+      glUni.uSdfRange = gl.getUniformLocation(glProg, 'uSdfRange');
       gl.disable(gl.DEPTH_TEST);
       gl.disable(gl.BLEND);
       return true;
@@ -660,6 +710,18 @@
       gl.uniform1f(glUni.uAngle, xf.ang);
       gl.uniform1f(glUni.uTime, now);
       gl.uniform1f(glUni.uFlare, flare);
+      gl.uniform1f(glUni.uHold, holdFps);
+      gl.uniform1f(glUni.uUseAtlas, flipReady ? 1 : 0);
+      if (flipReady && flipTex) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, flipTex);
+        gl.uniform1i(glUni.uAtlas, 0);
+        gl.uniform1f(glUni.uFrame, flipFrameAt(now));
+        gl.uniform4f(glUni.uGrid, flipMeta.cellW, flipMeta.cellH, flipMeta.cols, flipMeta.atlas);
+        gl.uniform2f(glUni.uFacePx, flipMeta.faceX, flipMeta.faceY);
+        gl.uniform1f(glUni.uPx, flipMeta.bodyHalf / 1.08);
+        gl.uniform1f(glUni.uSdfRange, flipMeta.sdfRange);
+      }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
@@ -1702,7 +1764,53 @@
 
     buildUI();
     softDot = makeSoftDot();
+    function flipFrameAt(now) {
+      if (!flipCumul.length) return 0;
+      var ms = ((now * 1000) % flipTotal + flipTotal) % flipTotal;
+      var lo = 0, hi = flipCumul.length - 1;
+      while (lo < hi) {
+        var mid = (lo + hi) >> 1;
+        if (flipCumul[mid] <= ms) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo;
+    }
+
+    function loadFlipbook() {
+      if (!gl) return;
+      fetch('assets/flame-flipbook.json').then(function (r) { return r.json(); }).then(function (meta) {
+        flipMeta = meta;
+        var acc = 0, i;
+        flipCumul = [];
+        for (i = 0; i < meta.durs.length; i++) {
+          acc += meta.durs[i];
+          flipCumul.push(acc);
+        }
+        flipTotal = meta.totalMs || acc;
+        var img = new Image();
+        img.onload = function () {
+          var c = document.createElement('canvas');
+          c.width = meta.atlas;
+          c.height = meta.atlas;
+          var g = c.getContext('2d');
+          g.drawImage(img, 0, 0);
+          flipTex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, flipTex);
+          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+          flipReady = true;
+        };
+        img.onerror = function () { console.warn('Echo flipbook image failed'); };
+        img.src = 'assets/flame-flipbook.png';
+      }).catch(function (e) { console.warn('Echo flipbook', e); });
+    }
+
     glOk = initFlameGL();
+    if (glOk) loadFlipbook();
     if (glOk) {
       canvas.style.background = 'transparent';
     } else if (flameCanvas) {
