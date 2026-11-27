@@ -2,7 +2,7 @@
 
 A moving preview of Echo as a lively flame spirit. Pure black background, approved white-face proportions, no libraries.
 
-**Live:** https://wirawibawa2-cmd.github.io/echo-face/preview/?v=2
+**Live:** https://wirawibawa2-cmd.github.io/echo-face/preview/?v=3
 
 This lives at `/preview/` so the root `index.html` (commit 6ff4e06) stays untouched.
 
@@ -15,7 +15,7 @@ Query flags: `?auto=1` starts Auto mode, `?debug=1` shows FPS, `?still=1&expr=ha
 
 ## Controls
 
-Echo stays in the center of the screen. The flame burns in place: tongues lick and split, the tip whips and curls, drips stretch and fall, embers rise, and the glow pulses. A gentle bob, blinks, look-around, and tap reactions keep him alive. The row at the bottom sets an expression. **Auto** cycles the 12 faces at random.
+Echo stays in the center of the screen. The flame is a real-time WebGL fire (domain-warped fbm, with a canvas fallback): a dark ember core behind the white face, and a hot white-yellow rim, tongues and tip. It licks, splits, curls and whips like the reference. A gentle bob, blinks, look-around, and tap flares keep him alive. The row at the bottom sets an expression. **Auto** cycles the 12 faces at random.
 
 ## App API
 

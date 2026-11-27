@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-title" content="Echo">
   <meta name="theme-color" content="#000000">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="Echo flame preview — a wandering fire spirit.">
+  <meta name="description" content="Echo flame preview — a centered fire spirit.">
   <link rel="apple-touch-icon" href="../apple-touch-icon.png">
   <link rel="icon" type="image/png" sizes="192x192" href="../icon-192.png">
   <title>Echo</title>
@@ -43,8 +43,9 @@
       width: 100%;
       height: 100%;
       display: block;
-      background: #000;
     }
+    #flame { z-index: 0; background: #000; }
+    #c { z-index: 1; background: transparent; }
     #bar {
       position: fixed;
       left: 0;
@@ -110,6 +111,7 @@
   </style>
 </head>
 <body>
+  <canvas id="flame" aria-hidden="true"></canvas>
   <canvas id="c" aria-label="Echo"></canvas>
   <div id="bar">
     <button type="button" class="pill" id="autoBtn" aria-pressed="false">Auto</button>
@@ -256,7 +258,7 @@
     var hideUi = flag('hideui') || flag('demo') || q.get('ui') === '0';
 
     var canvas = document.getElementById('c');
-    var ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+    var ctx = canvas.getContext('2d', { alpha: true, desynchronized: true });
     var fpsEl = document.getElementById('fps');
     var barEl = document.getElementById('bar');
     var pillsEl = document.getElementById('pills');
@@ -359,6 +361,262 @@
       return { x0: x0, y0: y0, x1: x1, y1: y1 };
     }
 
+
+    // --- WebGL1 procedural fire (raw, no libraries). Fallback is the canvas flame. ---
+    var flameCanvas = document.getElementById('flame');
+    var glOk = false;
+    var gl = null;
+    var glProg = null;
+    var glBuf = null;
+    var glUni = {};
+    var lastDraw = 0;
+
+    var FLAME_VERT = 'attribute vec2 aPos;void main(){gl_Position=vec4(aPos,0.0,1.0);}';
+
+    var FLAME_FRAG = [
+      '#ifdef GL_FRAGMENT_PRECISION_HIGH',
+      'precision highp float;',
+      '#else',
+      'precision mediump float;',
+      '#endif',
+      'uniform vec2 uRes;',
+      'uniform vec2 uCenter;',
+      'uniform vec2 uScale;',
+      'uniform float uAngle;',
+      'uniform float uTime;',
+      'uniform float uFlare;',
+      '',
+      'float hash12(vec2 p){',
+      '  vec2 q = fract(p * vec2(0.1031, 0.1030));',
+      '  q += dot(q, q.yx + 33.33);',
+      '  return fract((q.x + q.y) * q.x);',
+      '}',
+      '',
+      'float vnoise(vec2 p){',
+      '  vec2 i = floor(p);',
+      '  vec2 f = fract(p);',
+      '  vec2 u = f * f * (3.0 - 2.0 * f);',
+      '  float a = hash12(i);',
+      '  float b = hash12(i + vec2(1.0, 0.0));',
+      '  float c = hash12(i + vec2(0.0, 1.0));',
+      '  float d = hash12(i + vec2(1.0, 1.0));',
+      '  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);',
+      '}',
+      '',
+      'float fbm(vec2 p){',
+      '  float v = 0.0;',
+      '  float a = 0.5;',
+      '  for (int i = 0; i < 4; i++) {',
+      '    v += a * vnoise(p);',
+      '    p = vec2(p.x * 1.62 + p.y * 1.22, -p.x * 1.22 + p.y * 1.62) + 11.5;',
+      '    a *= 0.5;',
+      '  }',
+      '  return v;',
+      '}',
+      '',
+      // p in bulb-radii, y up, face at origin. Returns signed distance (neg = inside).
+      'float sdCapsule(vec2 p, vec2 a, vec2 b, float r){',
+      '  vec2 pa = p - a, ba = b - a;',
+      '  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);',
+      '  return length(pa - ba * h) - r;',
+      '}',
+      '',
+      'float sdFlame(vec2 p, float t){',
+      '  float h = smoothstep(0.30, 2.35, p.y);',
+      '  float w1 = fbm(vec2(t * 2.45, 1.6));',
+      '  float w2 = fbm(vec2(t * 3.95 + 4.0, 2.8));',
+      '  vec2 q = p;',
+      '  q.x += (w1 * 2.0 - 1.0) * 0.68 * h * h;',
+      '  q.y += (w2 * 2.0 - 1.0) * 0.22 * h;',
+      '  float ang = (fbm(vec2(t * 2.85, 5.2)) - 0.5) * 1.15 * h * h;',
+      '  float ca = cos(ang), sa = sin(ang);',
+      '  vec2 o = vec2(0.0, 0.95);',
+      '  vec2 tq = q - o;',
+      '  q = vec2(ca * tq.x - sa * tq.y, sa * tq.x + ca * tq.y) + o;',
+      '  // Extra hook so the tip curls back like the reference tongue.',
+      '  float hook = smoothstep(1.45, 2.35, q.y);',
+      '  float hookA = (fbm(vec2(t * 3.35, 8.1)) - 0.5) * 1.55;',
+      '  q.x += hookA * hook * hook * 0.70;',
+      '  q.y -= abs(hookA) * hook * hook * 0.22;',
+      '  float bulb = length(q - vec2(0.0, 0.10)) - 1.0;',
+      '  float u = clamp((q.y + 0.05) / 2.55, 0.0, 1.0);',
+      '  float halfW = mix(1.00, 0.055, pow(u, 0.80));',
+      '  float sides = abs(q.x) / max(halfW, 0.03) - 1.0;',
+      '  float sd = mix(bulb, sides, smoothstep(-0.05, 1.15, q.y));',
+      '  sd = max(sd, q.y - 2.62);',
+      '  // Two or three organic hanging drips that stretch and shrink — never a comb.',
+      '  float y0 = -0.78;',
+      '  float p1 = pow(0.5 + 0.5 * sin(t * 1.25 + 0.2), 1.6);',
+      '  float p2 = pow(0.5 + 0.5 * sin(t * 0.95 + 2.4), 1.8);',
+      '  float p3 = pow(0.5 + 0.5 * sin(t * 1.55 + 4.1), 2.2);',
+      '  float l1 = 0.14 + 0.48 * p1;',
+      '  float l2 = 0.22 + 0.82 * p2;',
+      '  float l3 = 0.10 + 0.32 * p3;',
+      '  float x1 = -0.28 + 0.05 * sin(t * 0.62);',
+      '  float x2 =  0.05 + 0.04 * sin(t * 0.51 + 1.0);',
+      '  float x3 =  0.32 + 0.05 * sin(t * 0.73 + 2.0);',
+      '  float d1 = sdCapsule(q, vec2(x1, y0), vec2(x1 * 1.08, y0 - l1), mix(0.12, 0.045, p1));',
+      '  float d2 = sdCapsule(q, vec2(x2, y0), vec2(x2 * 0.90, y0 - l2), mix(0.13, 0.040, p2));',
+      '  float d3 = sdCapsule(q, vec2(x3, y0), vec2(x3 * 1.06, y0 - l3), mix(0.10, 0.040, p3));',
+      '  sd = min(sd, min(d1, min(d2, d3)));',
+      '  return sd;',
+      '}',
+      '',
+      'void main(){',
+      '  vec2 screen = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);',
+      '  vec2 d = screen - uCenter;',
+      '  float ca = cos(uAngle), sa = sin(uAngle);',
+      '  vec2 r = vec2(ca * d.x + sa * d.y, -sa * d.x + ca * d.y);',
+      '  vec2 p = vec2(r.x / max(uScale.x, 0.001), -r.y / max(uScale.y, 0.001));',
+      '  p /= 102.0;',
+      '  float t = uTime;',
+      '  float flare = uFlare;',
+      '',
+      '  vec2 ns = vec2(p.x * 2.15, p.y * 1.9 - t * 2.75);',
+      '  float hw = smoothstep(0.25, 2.3, p.y);',
+      '  vec2 war1 = vec2(fbm(ns + vec2(0.0, t * 0.32)), fbm(ns + vec2(5.1, -t * 0.28)));',
+      '  ns += (war1 - 0.5) * (0.42 + 0.28 * flare + 0.40 * hw * hw);',
+      '  vec2 war2 = vec2(fbm(ns * 2.15 + 9.0 + t * 0.12), fbm(ns * 2.15 + 17.0 - t * 0.1));',
+      '  ns += (war2 - 0.5) * (0.18 + 0.28 * hw);',
+      '  float n = fbm(ns * 1.85);',
+      '  float nFine = fbm(ns * 3.7 + vec2(8.0, t * 0.45));',
+      '',
+      '  float sd = sdFlame(p, t);',
+      '  // Keep the bulb steadier; spend the turbulence on the crown and tongues.',
+      '  sd -= (n - 0.48) * (0.07 + 0.58 * hw * hw + 0.14 * flare);',
+      '  sd -= (nFine - 0.5) * (0.05 + 0.16 * hw);',
+      '',
+      '  float fire = smoothstep(0.10, -0.02, sd);',
+      '  float fireSoft = smoothstep(0.22, -0.04, sd);',
+      '',
+      '  // Approved dark ember behind the face.',
+      '  float core = 1.0 - smoothstep(0.10, 0.78, length(p - vec2(0.0, 0.04)));',
+      '  core *= 1.0 - smoothstep(0.45, 1.25, p.y);',
+      '',
+      '  // Tight incandescent rim — hot white-yellow, not a grey ash crust.',
+      '  float rim = fire * exp(-12.0 * abs(sd + 0.01));',
+      '  rim = clamp(rim * 1.35, 0.0, 1.0);',
+      '  float tip = smoothstep(0.70, 1.90, p.y) * fire;',
+      '',
+      '  vec3 emberA = vec3(0.42, 0.11, 0.025);',
+      '  vec3 emberB = vec3(0.761, 0.255, 0.047);',
+      '  vec3 orange = vec3(1.00, 0.38, 0.04);',
+      '  vec3 yellow = vec3(1.00, 0.92, 0.32);',
+      '  vec3 hot = vec3(1.00, 0.98, 0.90);',
+      '',
+      '  vec3 col = mix(emberB, orange, clamp(0.25 + 0.75 * n, 0.0, 1.0));',
+      '  col = mix(col, emberA, core);',
+      '  col = mix(col, yellow, clamp(rim * 0.95 + tip * 0.65, 0.0, 1.0));',
+      '  col = mix(col, hot, clamp(pow(rim, 0.75) * (0.85 + 0.6 * tip) + tip * 0.25, 0.0, 1.0));',
+      '  col *= 0.92 + 0.10 * nFine + 0.12 * flare;',
+      '',
+      '  // Small detached sparks near the tip only.',
+      '  vec2 bp = vec2(p.x * 4.4, p.y * 4.2 - t * 3.4);',
+      '  float bits = smoothstep(0.74, 0.90, fbm(bp + 13.5));',
+      '  bits *= smoothstep(1.35, 1.95, p.y) * smoothstep(2.75, 2.15, p.y);',
+      '  bits *= (1.0 - fire * 0.65) * smoothstep(0.85, 0.15, abs(p.x));',
+      '  col = mix(col, hot, bits);',
+      '  fire = max(fire, bits);',
+      '',
+      '  // Soft dark-red glow, faint thin ring.',
+      '  float glow = exp(-max(sd, 0.0) * 3.1) * (0.48 + 0.16 * fbm(vec2(t * 1.55, 0.4)) + 0.16 * flare);',
+      '  glow *= 1.0 - fire * 0.3;',
+      '  vec3 glowCol = vec3(0.55, 0.06, 0.012);',
+      '  float ring = abs(length(p - vec2(0.0, 0.10)) - 1.70);',
+      '  float ringA = exp(-ring * ring * 220.0) * (0.14 + 0.06 * fbm(vec2(p.x * 2.5, t * 0.35)));',
+      '  vec3 ringCol = vec3(0.80, 0.20, 0.04);',
+      '',
+      '  vec3 rgb = glowCol * glow + ringCol * ringA;',
+      '  rgb = mix(rgb, col, fire);',
+      '  rgb += hot * bits * 0.8;',
+      '  gl_FragColor = vec4(rgb, 1.0);',
+      '}'
+    ].join('\n');
+
+    function compileShader(type, src) {
+      var sh = gl.createShader(type);
+      gl.shaderSource(sh, src);
+      gl.compileShader(sh);
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+        console.warn('Echo flame shader', gl.getShaderInfoLog(sh));
+        gl.deleteShader(sh);
+        return null;
+      }
+      return sh;
+    }
+
+    function initFlameGL() {
+      if (!flameCanvas) return false;
+      var opts = {
+        alpha: false,
+        antialias: false,
+        depth: false,
+        stencil: false,
+        premultipliedAlpha: true,
+        preserveDrawingBuffer: false,
+        powerPreference: 'high-performance'
+      };
+      gl = flameCanvas.getContext('webgl', opts) || flameCanvas.getContext('experimental-webgl', opts);
+      if (!gl) return false;
+      var vs = compileShader(gl.VERTEX_SHADER, FLAME_VERT);
+      var fs = compileShader(gl.FRAGMENT_SHADER, FLAME_FRAG);
+      if (!vs || !fs) return false;
+      glProg = gl.createProgram();
+      gl.attachShader(glProg, vs);
+      gl.attachShader(glProg, fs);
+      gl.bindAttribLocation(glProg, 0, 'aPos');
+      gl.linkProgram(glProg);
+      if (!gl.getProgramParameter(glProg, gl.LINK_STATUS)) {
+        console.warn('Echo flame program', gl.getProgramInfoLog(glProg));
+        return false;
+      }
+      glBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        -1, -1, 1, -1, -1, 1, 1, 1
+      ]), gl.STATIC_DRAW);
+      glUni.uRes = gl.getUniformLocation(glProg, 'uRes');
+      glUni.uCenter = gl.getUniformLocation(glProg, 'uCenter');
+      glUni.uScale = gl.getUniformLocation(glProg, 'uScale');
+      glUni.uAngle = gl.getUniformLocation(glProg, 'uAngle');
+      glUni.uTime = gl.getUniformLocation(glProg, 'uTime');
+      glUni.uFlare = gl.getUniformLocation(glProg, 'uFlare');
+      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.BLEND);
+      return true;
+    }
+
+    function resizeFlameGL() {
+      if (!gl || !flameCanvas) return;
+      var dw = Math.max(1, Math.round(W));
+      var dh = Math.max(1, Math.round(H));
+      if (flameCanvas.width !== dw || flameCanvas.height !== dh) {
+        flameCanvas.width = dw;
+        flameCanvas.height = dh;
+      }
+      flameCanvas.style.width = W + 'px';
+      flameCanvas.style.height = H + 'px';
+      gl.viewport(0, 0, dw, dh);
+    }
+
+    function renderFlameGL(now, xf) {
+      if (!gl || !glProg) return;
+      gl.viewport(0, 0, flameCanvas.width, flameCanvas.height);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.useProgram(glProg);
+      gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      gl.uniform2f(glUni.uRes, flameCanvas.width, flameCanvas.height);
+      gl.uniform2f(glUni.uCenter, xf.x, xf.y);
+      gl.uniform2f(glUni.uScale, xf.scx, xf.scy);
+      gl.uniform1f(glUni.uAngle, xf.ang);
+      gl.uniform1f(glUni.uTime, now);
+      gl.uniform1f(glUni.uFlare, flare);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
     function resize() {
       W = window.innerWidth;
       H = window.innerHeight;
@@ -371,6 +629,7 @@
       readSafe();
       S = clamp(Math.min(W, H) / 430, 0.72, 1.55);
       placeCenter(true);
+      if (glOk) resizeFlameGL();
     }
 
     function placeCenter(init) {
@@ -1193,9 +1452,25 @@
       }
     }
 
+    function drawFaceLayer(now, xf) {
+      ctx.save();
+      ctx.translate(xf.x, xf.y);
+      ctx.rotate(xf.ang);
+      ctx.scale(xf.scx, xf.scy);
+      ctx.translate(-FACE_CX, -FACE_CY);
+      drawAttachedDrips(ctx, now, xf);
+      drawFace(ctx, now);
+      ctx.restore();
+      drawParticles(ctx, now, xf);
+    }
+
     function drawEcho(now) {
-      if (!ready || !bodyImg) return;
       var xf = currentXF();
+      if (glOk) {
+        renderFlameGL(now, xf);
+        return;
+      }
+      if (!ready || !bodyImg) return;
 
       ctx.save();
       ctx.translate(xf.x, xf.y);
@@ -1251,9 +1526,16 @@
 
     function draw(now) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, W, H);
-      drawEcho(now);
+      var xf = currentXF();
+      if (glOk) {
+        ctx.clearRect(0, 0, W, H);
+        renderFlameGL(now, xf);
+        drawFaceLayer(now, xf);
+      } else {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, W, H);
+        drawEcho(now);
+      }
       if (debugOn) {
         fpsAcc += 1;
         if (now - (fpsFrames || now) >= 0.5) {
@@ -1267,13 +1549,16 @@
     }
 
     function loop(ts) {
+      requestAnimationFrame(loop);
       var now = ts * 0.001;
       var dt = last ? Math.min(0.05, now - last) : 0.016;
       last = now;
       time = now;
       update(dt, now);
+      // Cap draws at 60fps (iPhone ProMotion can be 120).
+      if (lastDraw && (now - lastDraw) < 0.0155) return;
+      lastDraw = now;
       draw(now);
-      requestAnimationFrame(loop);
     }
 
     function clientPoint(ev) {
@@ -1366,37 +1651,48 @@
     };
 
     buildUI();
+    softDot = makeSoftDot();
+    glOk = initFlameGL();
+    if (glOk) {
+      canvas.style.background = 'transparent';
+    } else if (flameCanvas) {
+      flameCanvas.style.display = 'none';
+    }
     resize();
     setExpressionInternal(startName, true);
     if (autoOn) setAuto(true);
     blinkUntil = rand(0.8, 2.0);
+    flickerN = Math.random() * 10;
+    nextEmber = 0.05;
+    nextDrop = 0.25;
+    nextSmoke = 0.12;
+    nextTongue = 0.02;
+
+    var started = false;
+    function startLoop() {
+      if (started) return;
+      started = true;
+      ready = true;
+      requestAnimationFrame(function (ts) {
+        last = ts * 0.001;
+        requestAnimationFrame(loop);
+      });
+    }
+
+    if (glOk) startLoop();
 
     var img = new Image();
     img.onload = function () {
       bodyImg = img;
       glowCvs = makeGlow();
-      softDot = makeSoftDot();
       outline = extractOutline(img);
       ready = true;
-      flickerN = Math.random() * 10;
-      nextEmber = 0.05;
-      nextDrop = 0.25;
-      nextSmoke = 0.12;
-      nextTongue = 0.02;
-      requestAnimationFrame(function (ts) {
-        last = ts * 0.001;
-        requestAnimationFrame(loop);
-      });
+      startLoop();
     };
     img.onerror = function () {
-      // Still run, procedurally, so the page is never blank if the asset 404s.
       glowCvs = makeGlow();
-      softDot = makeSoftDot();
       ready = true;
-      requestAnimationFrame(function (ts) {
-        last = ts * 0.001;
-        requestAnimationFrame(loop);
-      });
+      startLoop();
     };
     img.src = 'assets/flame-body.png';
   })();
