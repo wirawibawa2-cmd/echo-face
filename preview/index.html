@@ -257,6 +257,9 @@
     var debugOn = flag('debug');
     var hideUi = flag('hideui') || flag('demo') || q.get('ui') === '0';
     var holdFps = flag('smooth') ? 0 : (parseFloat(q.get('hold')) || 22);
+    var blackFace = q.get('face') !== 'white' && !flag('whiteface');
+    var faceInk = blackFace ? '#1a0c08' : '#fff';
+    var faceShadeAmt = blackFace ? 0.0 : 1.0;
     var flipMeta = null;
     var flipReady = false;
     var flipTex = null;
@@ -399,6 +402,7 @@
       'uniform vec2 uFacePx;',
       'uniform float uPx;',
       'uniform float uSdfRange;',
+      'uniform float uFaceShade;',
       '',
       'float hash12(vec2 p){',
       '  vec2 q = fract(p * vec2(0.1031, 0.1030));',
@@ -559,36 +563,47 @@
       '    }',
       '  }',
       '',
-      '  vec3 bodyA = vec3(0.761, 0.255, 0.047);',  // #c2410c
-      '  vec3 bodyB = vec3(0.918, 0.345, 0.047);',  // #ea580c
-      '  vec3 ember = vec3(0.478, 0.129, 0.027);',  // darker toward the face
-      '  vec3 yellow= vec3(1.00, 0.82, 0.25);',
-      '  vec3 hot   = vec3(1.00, 0.95, 0.78);',
-      '  vec3 haloC = vec3(0.71,  0.22, 0.06);',
-      '  vec3 glowC = vec3(0.196, 0.055, 0.035);',
-      '  vec3 ringC = vec3(0.45,  0.14,  0.06);',
-      '  vec3 smokeC= vec3(0.30,  0.24,  0.21);',
+      '  vec3 cream = vec3(1.000, 1.000, 0.420);',   // 255,255,107
+      '  vec3 gold  = vec3(0.996, 0.698, 0.173);',   // 254,178,44
+      '  vec3 orange= vec3(0.808, 0.424, 0.129);',   // 206,108,33
+      '  vec3 deep  = vec3(0.498, 0.216, 0.118);',   // 127,55,30
+      '  vec3 shade = vec3(0.235, 0.078, 0.047);',   // dark band behind the face
+      '  vec3 haloC = vec3(0.90,  0.42,  0.10);',    // soft orange glow
+      '  vec3 glowC = vec3(0.35,  0.10,  0.05);',
+      '  vec3 hazeC = vec3(0.188, 0.063, 0.063);',   // maroon-brown haze
+      '  vec3 ringC = vec3(0.45,  0.16,  0.07);',
+      '  vec3 smokeC= vec3(0.30,  0.18,  0.14);',
       '',
       '  float dist = length(p);',
       '  float sd = (uUseAtlas > 0.5) ? sdA : sdFlame(p, ts);',
-      '  float fire = smoothstep(0.016, -0.007, sd);',
+      '  // Pixel-sized AA so edges stay smooth at 2x DPR without jaggies.',
+      '  float aa = 1.35 / max(uScale.y * 102.0, 1.0);',
+      '  float fire = smoothstep(aa, -aa, sd);',
       '',
-      '  // Deep orange body, slightly darker toward the face. No flat white fill.',
-      '  vec3 col = mix(bodyA, bodyB, clamp(0.30 + 0.55 * vnoise(p * 2.4 + ts * 0.5), 0.0, 1.0));',
-      '  float core = 1.0 - smoothstep(0.14, 0.68, length(p - vec2(0.0, 0.02)));',
-      '  col = mix(col, ember, core);',
-      '  // Brighter orange-yellow only on thin edges and tips.',
-      '  float rim = fire * exp(-80.0 * abs(sd));',
-      '  float tip = fire * smoothstep(0.50, 1.45, p.y);',
-      '  col = mix(col, yellow, clamp(rim * 0.90 + tip * rim * 0.4, 0.0, 1.0));',
-      '  col = mix(col, hot, clamp(pow(rim, 0.75) * (0.45 + 0.55 * tip), 0.0, 1.0));',
+      '  // Posterized cream / gold / orange bands. Hot patches scroll with the boil.',
+      '  float nH = vnoise(vec2(p.x * 0.62, p.y * 0.55 - ts * 0.62));',
+      '  float nH2= vnoise(vec2(p.x * 1.05 + 5.3, p.y * 0.90 - ts * 0.28));',
+      '  float boil = nH * 0.80 + nH2 * 0.20;',
+      '  float depth = clamp(-sd * 1.20, 0.0, 1.0);',
+      '  float band = mix(0.10, 0.88, boil) * mix(0.40, 1.0, depth);',
+      '  float toGold  = smoothstep(0.18, 0.26, band);',
+      '  float toCream = smoothstep(0.48, 0.56, band);',
+      '  vec3 col = mix(orange, gold, toGold);',
+      '  col = mix(col, cream, toCream);',
+      '  float rimT = smoothstep(-0.14, -0.02, sd);',
+      '  col = mix(col, orange, rimT * 0.95);',
+      '  col = mix(col, deep, rimT * smoothstep(0.02, 0.12, sd + 0.04) * 0.22);',
+      '  // Optional dark band behind the white face so it stays readable on cream.',
+      '  float core = 1.0 - smoothstep(0.16, 0.72, length(p - vec2(0.0, 0.03)));',
+      '  col = mix(col, shade, core * uFaceShade);',
       '',
-      '  // Tight orange halo around the crisp edge, then a soft dark-red aura.',
-      '  float close = exp(-max(sd, 0.0) * 7.5) * (0.95 + 0.15 * uFlare);',
-      '  float midg  = exp(-max(sd, 0.0) * 2.1) * 0.55;',
-      '  float far   = exp(-dist * 0.68) * 0.24;',
+      '  // Soft orange halo, then maroon-brown haze like the color reference.',
+      '  float close = exp(-max(sd, 0.0) * 5.8) * (0.95 + 0.15 * uFlare);',
+      '  float midg  = exp(-max(sd, 0.0) * 1.7) * 0.50;',
+      '  float hazeA = exp(-dist * 0.42) * 0.85;',
       '  close *= 1.0 - fire * 0.92;',
       '  midg  *= 1.0 - fire * 0.85;',
+      '  hazeA *= 1.0 - fire * 0.70;',
       '',
       '  // Faint broken ring, not a clock face.',
       '  float aang = atan(p.y + 0.06, p.x);',
@@ -615,7 +630,7 @@
       '  }',
       '  smoke *= 1.0 - fire;',
       '',
-      '  vec3 rgb = haloC * close + glowC * (midg + far) + ringC * ringA + smokeC * smoke;',
+      '  vec3 rgb = hazeC * hazeA + haloC * close + glowC * midg + ringC * ringA + smokeC * smoke;',
       '  rgb = mix(rgb, col, fire);',
       '  gl_FragColor = vec4(rgb, 1.0);',
       '}'
@@ -677,6 +692,7 @@
       glUni.uFacePx = gl.getUniformLocation(glProg, 'uFacePx');
       glUni.uPx = gl.getUniformLocation(glProg, 'uPx');
       glUni.uSdfRange = gl.getUniformLocation(glProg, 'uSdfRange');
+      glUni.uFaceShade = gl.getUniformLocation(glProg, 'uFaceShade');
       gl.disable(gl.DEPTH_TEST);
       gl.disable(gl.BLEND);
       return true;
@@ -684,8 +700,9 @@
 
     function resizeFlameGL() {
       if (!gl || !flameCanvas) return;
-      var dw = Math.max(1, Math.round(W));
-      var dh = Math.max(1, Math.round(H));
+      var fdpr = Math.min(window.devicePixelRatio || 1, 2);
+      var dw = Math.max(1, Math.round(W * fdpr));
+      var dh = Math.max(1, Math.round(H * fdpr));
       if (flameCanvas.width !== dw || flameCanvas.height !== dh) {
         flameCanvas.width = dw;
         flameCanvas.height = dh;
@@ -704,9 +721,10 @@
       gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      var fdpr = flameCanvas.width / Math.max(W, 1);
       gl.uniform2f(glUni.uRes, flameCanvas.width, flameCanvas.height);
-      gl.uniform2f(glUni.uCenter, xf.x, xf.y);
-      gl.uniform2f(glUni.uScale, xf.scx, xf.scy);
+      gl.uniform2f(glUni.uCenter, xf.x * fdpr, xf.y * fdpr);
+      gl.uniform2f(glUni.uScale, xf.scx * fdpr, xf.scy * fdpr);
       gl.uniform1f(glUni.uAngle, xf.ang);
       gl.uniform1f(glUni.uTime, now);
       gl.uniform1f(glUni.uFlare, flare);
@@ -721,6 +739,9 @@
         gl.uniform2f(glUni.uFacePx, flipMeta.faceX, flipMeta.faceY);
         gl.uniform1f(glUni.uPx, flipMeta.bodyHalf / 1.08);
         gl.uniform1f(glUni.uSdfRange, flipMeta.sdfRange);
+        gl.uniform1f(glUni.uFaceShade, faceShadeAmt);
+      } else {
+        gl.uniform1f(glUni.uFaceShade, faceShadeAmt);
       }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
@@ -1210,8 +1231,8 @@
       c.rotate(rot || 0);
       var r = D / 2;
       var thick = D * 0.18;
-      c.fillStyle = '#fff';
-      c.strokeStyle = '#fff';
+      c.fillStyle = faceInk;
+      c.strokeStyle = faceInk;
       c.lineCap = 'round';
       c.lineJoin = 'round';
       if (kind === 'circle') {
@@ -1265,7 +1286,7 @@
       if (amt < 0.05) return;
       c.save();
       c.globalAlpha *= amt;
-      c.strokeStyle = '#fff';
+      c.strokeStyle = faceInk;
       var thick = D * 0.11;
       // inner ends raised (worried)
       var lift = D * 0.16;
@@ -1296,8 +1317,8 @@
       var mx = FACE_CX;
       var my = mouthCenterY(curve, width / EYE_D, thick / EYE_D);
 
-      c.strokeStyle = '#fff';
-      c.fillStyle = '#fff';
+      c.strokeStyle = faceInk;
+      c.fillStyle = faceInk;
 
       if (open > 0.08) {
         var rx = width * 0.42;
@@ -1368,7 +1389,7 @@
       var open = blink;
 
       // Soft pre-rendered glow under features (no per-frame filters).
-      if (softDot) {
+      if (softDot && !blackFace) {
         var gs = D * 2.6;
         c.globalAlpha = 0.55;
         c.drawImage(softDot, eyes.lx - gs / 2, eyes.y - gs / 2, gs, gs);
