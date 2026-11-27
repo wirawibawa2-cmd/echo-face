@@ -295,9 +295,16 @@
     var embers = [];
     var drops = [];
     var smokes = [];
+    var tongues = [];
+    var bits = [];
     var nextEmber = 0;
     var nextDrop = 0;
     var nextSmoke = 0;
+    var nextTongue = 0;
+    var outline = null;
+    var rest = { x: 0, y: 0 };
+    var flare = 0;
+    var NECK_Y = 402;
 
     var time = 0;
     var last = 0;
@@ -363,10 +370,18 @@
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       readSafe();
       S = clamp(Math.min(W, H) / 430, 0.72, 1.55);
-      if (!pos.x && !pos.y) {
-        var r = playable();
-        pos.x = pos.tx = (r.x0 + r.x1) / 2;
-        pos.y = pos.ty = (r.y0 + r.y1) / 2;
+      placeCenter(true);
+    }
+
+    function placeCenter(init) {
+      var barH = (barEl && !hideUi) ? barEl.getBoundingClientRect().height : 0;
+      rest.x = W / 2;
+      rest.y = safe.top + (H - safe.top - barH) / 2;
+      if (init || (!pos.x && !pos.y)) {
+        pos.x = pos.tx = rest.x;
+        pos.y = pos.ty = rest.y;
+        pos.vx = 0;
+        pos.vy = 0;
       }
     }
 
@@ -494,13 +509,6 @@
         }
         look.until = now + rand(1.2, 3.4);
       }
-      if (phase === 'move' && !follow) {
-        var sp = Math.hypot(pos.vx, pos.vy);
-        if (sp > 20) {
-          look.tx = clamp(look.tx * 0.7 + (pos.vx / 180) * 0.8, -1, 1);
-          look.ty = clamp(look.ty * 0.7 + (pos.vy / 180) * 0.8, -1, 1);
-        }
-      }
       var ltx = clamp(look.tx + cur.lookBiasX, -1.15, 1.15);
       var lty = clamp(look.ty + cur.lookBiasY, -1.15, 1.15);
       look.x = expApproach(look.x, ltx, 6.5, dt);
@@ -508,69 +516,22 @@
     }
 
     function updateMotion(dt, now) {
-      if (stillMode) {
-        var r0 = playable();
-        pos.tx = (r0.x0 + r0.x1) / 2;
-        pos.ty = (r0.y0 + r0.y1) / 2;
-      } else if (follow) {
-        phase = 'follow';
-        var bounds = playable();
-        pos.tx = clamp(follow.x, bounds.x0, bounds.x1);
-        pos.ty = clamp(follow.y, bounds.y0, bounds.y1);
-      } else if (phase === 'pause') {
-        pos.tx = pos.x;
-        pos.ty = pos.y;
-        if (now >= phaseUntil) {
-          nextTarget = pickWanderTarget();
-          var ang = Math.atan2(nextTarget.y - pos.y, nextTarget.x - pos.x);
-          pos.tx = pos.x - Math.cos(ang) * 16 * S;
-          pos.ty = pos.y - Math.sin(ang) * 16 * S;
-          phase = 'anticipate';
-          phaseUntil = now + 0.13;
-          squash = 0.12;
-        }
-      } else if (phase === 'anticipate') {
-        if (now >= phaseUntil) {
-          pos.tx = nextTarget.x;
-          pos.ty = nextTarget.y;
-          phase = 'move';
-        }
-      } else if (phase === 'move' || phase === 'follow') {
-        if (phase === 'move') {
-          var dist = Math.hypot(pos.tx - pos.x, pos.ty - pos.y);
-          var spd = Math.hypot(pos.vx, pos.vy);
-          if (dist < 14 * S && spd < 28) {
-            phase = 'pause';
-            phaseUntil = now + rand(0.55, 2.1);
-            pos.tx = pos.x;
-            pos.ty = pos.y;
-            squash = 0.1;
-          }
-        } else {
-          phase = 'pause';
-          phaseUntil = now + rand(0.4, 1.0);
-        }
-      }
-
-      var omega = follow ? 7.2 : (phase === 'anticipate' ? 8.5 : 3.4);
-      var zeta = follow ? 0.9 : 0.88;
+      placeCenter(false);
+      // Stay in the center. Subtle bob / breathe only — no wandering.
+      var bob = stillMode ? 0 : (Math.sin(now * 2.15) * 4.0 * S + Math.sin(now * 3.6 + 0.4) * 1.6 * S);
+      var breathe = stillMode ? 0 : 0.016 * Math.sin(now * 2.15);
+      pos.tx = rest.x;
+      pos.ty = rest.y + bob;
+      var omega = 9.2, zeta = 0.93;
       var ax = omega * omega * (pos.tx - pos.x) - 2 * zeta * omega * pos.vx;
       var ay = omega * omega * (pos.ty - pos.y) - 2 * zeta * omega * pos.vy;
       pos.vx += ax * dt;
       pos.vy += ay * dt;
       pos.x += pos.vx * dt;
       pos.y += pos.vy * dt;
-
-      var b = playable();
-      if (pos.x < b.x0) { pos.x = b.x0; if (pos.vx < 0) pos.vx *= -0.25; }
-      if (pos.x > b.x1) { pos.x = b.x1; if (pos.vx > 0) pos.vx *= -0.25; }
-      if (pos.y < b.y0) { pos.y = b.y0; if (pos.vy < 0) pos.vy *= -0.25; }
-      if (pos.y > b.y1) { pos.y = b.y1; if (pos.vy > 0) pos.vy *= -0.25; }
-
-      var speed = Math.hypot(pos.vx, pos.vy);
-      var leanT = (speed > 8) ? Math.atan2(pos.vy, pos.vx) * clamp(speed / 260, 0, 0.18) : 0;
-      lean = expApproach(lean, leanT, 5, dt);
-      squash = expApproach(squash, 0, 8, dt);
+      lean = expApproach(lean, 0.018 * Math.sin(now * 2.7 + flickerN), 6, dt);
+      squash = expApproach(squash, breathe, 8, dt);
+      flare = Math.max(0, flare - dt * 2.4);
     }
 
     function approachParams(dt) {
@@ -585,7 +546,7 @@
     }
 
     function updateAuto(dt) {
-      if (!autoOn || stillMode) return;
+      if (!autoOn) return;
       autoTimer += dt;
       if (autoTimer >= autoHold) {
         autoTimer = 0;
@@ -610,98 +571,212 @@
 
     function currentXF() {
       var sc = bodyScale();
-      var flickX = 1 + 0.012 * Math.sin(time * 17.2) + 0.008 * Math.sin(time * 29.0 + flickerN);
-      var flickY = 1 + 0.018 * Math.sin(time * 13.6 + 0.7) + 0.01 * Math.sin(time * 23.4 + 1.4);
-      var tipSway = 0.035 * Math.sin(time * 5.4) + 0.02 * Math.sin(time * 8.7 + 1.1);
+      var flickX = 1 + 0.008 * Math.sin(time * 15.4) + 0.005 * Math.sin(time * 27.0 + flickerN);
+      var flickY = 1 + 0.014 * Math.sin(time * 12.8 + 0.7) + 0.007 * Math.sin(time * 21.0 + 1.4);
       return {
         x: pos.x,
         y: pos.y,
-        scx: sc * (1 + squash * 0.55) * flickX,
-        scy: sc * (1 - squash * 0.4) * flickY,
-        ang: lean + tipSway * 0.35
+        scx: sc * (1 + squash * 0.45) * flickX,
+        scy: sc * (1 - squash * 0.32) * flickY,
+        ang: lean
       };
     }
 
-    function spawnEmber(now, xf) {
-      var sx = rand(SOLID_L + 20, SOLID_R - 20);
-      var sy = rand(TIP_Y + 30, FACE_CY + 20);
+    function n1(t, s) {
+      return Math.sin(t + s) * 0.54 + Math.sin(t * 1.93 + s * 1.7) * 0.31 + Math.sin(t * 3.27 + s * 2.4) * 0.15;
+    }
+
+    function spawnEmber(now, xf, sx, sy, extra) {
+      sx = sx != null ? sx : rand(SOLID_L + 16, SOLID_R - 16);
+      sy = sy != null ? sy : rand(TIP_Y + 10, FACE_CY);
       var p = spriteToWorld(sx, sy, xf);
       embers.push({
         x: p.x, y: p.y,
-        vx: rand(-12, 12) * S,
-        vy: rand(-40, -18) * S,
-        r: rand(1.1, 2.4) * S,
+        vx: rand(-22, 22) * S,
+        vy: rand(-70, -28) * S,
+        r: rand(1.0, 2.6) * S,
         born: now,
-        life: rand(0.55, 1.15),
+        life: rand(0.4, 1.05),
         hue: Math.random()
       });
+      if (extra) embers[embers.length - 1].vy *= 1.25;
     }
 
     function spawnDrop(now, xf) {
-      var src = DRIPS[Math.random() < 0.45 ? 0 : 1];
-      var p = spriteToWorld(src.x + rand(-3, 3), src.y + rand(-2, 4), xf);
+      var src = DRIPS[Math.random() < 0.4 ? 0 : 1];
       drops.push({
-        x: p.x, y: p.y,
-        vx: rand(-6, 6) * S,
-        vy: rand(10, 24) * S,
-        r: rand(1.6, 2.8) * S,
+        sx: src.x + rand(-4, 4),
+        sy: src.y + rand(-2, 3),
+        attached: 1,
+        stretch: rand(8, 16),
+        maxStretch: rand(28, 58),
+        vx: 0, vy: 0,
+        x: 0, y: 0,
+        r: rand(1.8, 3.0),
         born: now,
-        life: rand(0.45, 0.85)
+        life: rand(0.7, 1.25)
       });
     }
 
     function spawnSmoke(now, xf) {
-      var p = spriteToWorld(TIP_X + rand(-18, 22), TIP_Y + rand(-6, 30), xf);
+      var p = spriteToWorld(TIP_X + rand(-22, 26), TIP_Y + rand(-10, 36), xf);
       smokes.push({
         x: p.x, y: p.y,
-        vx: rand(-8, 14) * S,
-        vy: rand(-22, -8) * S,
-        r: rand(6, 13) * S,
+        vx: rand(-10, 16) * S,
+        vy: rand(-28, -10) * S,
+        r: rand(7, 16) * S,
         born: now,
-        life: rand(0.9, 1.7)
+        life: rand(1.0, 2.0)
+      });
+    }
+
+    function spawnTongue(now, kind) {
+      var side = kind === 'left' ? -1 : (kind === 'right' ? 1 : (Math.random() < 0.5 ? -1 : 1));
+      var fromShoulder = kind === 'left' || kind === 'right' || Math.random() < 0.28;
+      var baseX = fromShoulder ? (BULB_CX + side * rand(40, 78)) : (TIP_X + rand(-16, 16));
+      var baseY = fromShoulder ? (NECK_Y + rand(-10, 36)) : (TIP_Y + rand(6, 28));
+      tongues.push({
+        born: now,
+        life: rand(0.16, 0.42),
+        baseX: baseX,
+        baseY: baseY,
+        side: side,
+        maxLen: rand(36, 86) + flare * 28,
+        width: rand(5, 11),
+        curl: rand(0.6, 1.4) * side,
+        seed: rand(0, 20),
+        split: Math.random() < 0.55,
+        didSplit: false,
+        hot: Math.random() < 0.4
+      });
+    }
+
+    function spawnBit(now, xf, sx, sy, vx, vy) {
+      var p = spriteToWorld(sx, sy, xf);
+      bits.push({
+        x: p.x, y: p.y,
+        vx: (vx != null ? vx : rand(-16, 16)) * S,
+        vy: (vy != null ? vy : rand(-50, -18)) * S,
+        r: rand(2.2, 5.5),
+        rot: rand(0, 6),
+        rv: rand(-4, 4),
+        born: now,
+        life: rand(0.22, 0.55),
+        tall: rand(1.3, 2.2)
       });
     }
 
     function updateParticles(dt, now, xf) {
       if (now >= nextEmber) {
         spawnEmber(now, xf);
-        if (Math.random() < 0.4) spawnEmber(now, xf);
-        nextEmber = now + rand(0.07, 0.18);
+        if (Math.random() < 0.55) spawnEmber(now, xf);
+        if (flare > 0.2) spawnEmber(now, xf, TIP_X, TIP_Y, true);
+        nextEmber = now + rand(0.04, 0.11);
       }
       if (now >= nextDrop) {
         spawnDrop(now, xf);
-        nextDrop = now + rand(0.55, 1.5);
+        nextDrop = now + rand(0.28, 0.85);
       }
       if (now >= nextSmoke) {
         spawnSmoke(now, xf);
-        nextSmoke = now + rand(0.28, 0.7);
+        nextSmoke = now + rand(0.18, 0.48);
       }
+      if (now >= nextTongue) {
+        var k = Math.random();
+        spawnTongue(now, k < 0.22 ? 'left' : (k < 0.44 ? 'right' : 'crown'));
+        if (Math.random() < 0.45 + flare * 0.4) spawnTongue(now, 'crown');
+        nextTongue = now + rand(0.07, 0.16);
+      }
+
       var i;
+      for (i = tongues.length - 1; i >= 0; i--) {
+        var tg = tongues[i];
+        var u = (now - tg.born) / tg.life;
+        if (u >= 1) { tongues.splice(i, 1); continue; }
+        if (tg.split && !tg.didSplit && u > 0.48) {
+          tg.didSplit = true;
+          var len = tg.maxLen * (u < 0.45 ? u / 0.45 : (1 - u) / 0.55);
+          var tipX = tg.baseX + tg.curl * 22 * n1(now * 9 + tg.seed, 2) + tg.side * len * 0.28;
+          var tipY = tg.baseY - len;
+          spawnBit(now, xf, tipX, tipY, tg.side * 28, -60);
+          if (Math.random() < 0.6) spawnEmber(now, xf, tipX, tipY, true);
+        }
+      }
       for (i = embers.length - 1; i >= 0; i--) {
         var e = embers[i];
-        e.vy -= 18 * S * dt;
+        e.vy -= 22 * S * dt;
+        e.vx += n1(now * 8 + i, 3) * 18 * S * dt;
         e.x += e.vx * dt;
         e.y += e.vy * dt;
-        e.vx *= (1 - 0.6 * dt);
+        e.vx *= (1 - 0.55 * dt);
         if (now - e.born > e.life) embers.splice(i, 1);
       }
       for (i = drops.length - 1; i >= 0; i--) {
         var d = drops[i];
-        d.vy += 220 * S * dt;
-        d.x += d.vx * dt;
-        d.y += d.vy * dt;
+        if (d.attached) {
+          d.stretch += (38 + flare * 20) * dt * 60 / 4;
+          if (d.stretch >= d.maxStretch || now - d.born > d.life * 0.55) {
+            d.attached = 0;
+            var pw = spriteToWorld(d.sx, d.sy + d.stretch, xf);
+            d.x = pw.x; d.y = pw.y;
+            d.vy = 30 * S;
+            d.vx = rand(-8, 8) * S;
+          }
+        } else {
+          d.vy += 260 * S * dt;
+          d.x += d.vx * dt;
+          d.y += d.vy * dt;
+        }
         if (now - d.born > d.life) drops.splice(i, 1);
       }
       for (i = smokes.length - 1; i >= 0; i--) {
         var s = smokes[i];
         s.x += s.vx * dt;
         s.y += s.vy * dt;
-        s.r += 8 * S * dt;
+        s.r += 10 * S * dt;
         if (now - s.born > s.life) smokes.splice(i, 1);
       }
-      while (embers.length > 36) embers.shift();
-      while (drops.length > 6) drops.shift();
-      while (smokes.length > 10) smokes.shift();
+      for (i = bits.length - 1; i >= 0; i--) {
+        var b = bits[i];
+        b.vy += 8 * S * dt;
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        b.rot += b.rv * dt;
+        b.r *= (1 - 0.8 * dt);
+        if (now - b.born > b.life) bits.splice(i, 1);
+      }
+      while (embers.length > 42) embers.shift();
+      while (drops.length > 8) drops.shift();
+      while (smokes.length > 12) smokes.shift();
+      while (tongues.length > 10) tongues.shift();
+      while (bits.length > 14) bits.shift();
+    }
+
+    function extractOutline(img) {
+      var c = document.createElement('canvas');
+      c.width = IMG_W;
+      c.height = IMG_H;
+      var g = c.getContext('2d');
+      g.drawImage(img, 0, 0);
+      var data = g.getImageData(0, 0, IMG_W, IMG_H).data;
+      function solid(x, y) {
+        if (x < 0 || y < 0 || x >= IMG_W || y >= IMG_H) return false;
+        var i = ((y | 0) * IMG_W + (x | 0)) * 4;
+        // Solid body only — skip the soft glow and the ring.
+        return data[i + 3] > 180 && (data[i] + data[i + 1] + data[i + 2]) > 170;
+      }
+      var pts = [];
+      var N = 80;
+      for (var k = 0; k < N; k++) {
+        var a = -Math.PI / 2 + (k / N) * Math.PI * 2;
+        var ca = Math.cos(a), sa = Math.sin(a);
+        var hit = 24, r;
+        for (r = 16; r < 300; r += 2) {
+          if (!solid(BULB_CX + ca * r, BULB_CY + sa * r)) { hit = r - 1; break; }
+        }
+        pts.push({ a: a, r: hit, ca: ca, sa: sa, upper: sa < -0.05 });
+      }
+      return pts;
     }
 
     function makeGlow() {
@@ -954,71 +1029,166 @@
       c.restore();
     }
 
-    function drawLicks(c, tNow) {
-      // Extra licking tongues at the painted tip. Cheap paths, no filters.
+    function drawWarpedTip(c, tNow) {
+      // Warp the painted crown as one piece around the neck so the tip
+      // whips, stretches and curls without striping. Face stays planted.
+      if (!bodyImg) return;
+      var sway = 20 * n1(tNow * 11.2, 1.1) + 12 * n1(tNow * 6.3, 5.4);
+      var stretch = 1 + 0.18 * n1(tNow * 8.4, 3.2) + 0.05 * flare;
+      var curl = 0.16 * n1(tNow * 7.2, 2.1) + 0.07 * n1(tNow * 13.5, 4.8);
       c.save();
-      c.globalCompositeOperation = 'source-over';
-      var n = 3;
-      for (var i = 0; i < n; i++) {
-        var phase = tNow * (2.8 + i * 0.7) + i * 1.7;
-        var len = 28 + 16 * (0.5 + 0.5 * Math.sin(phase));
-        var bend = 18 * Math.sin(phase * 0.85 + i);
-        var baseX = TIP_X + (i - 1) * 10 + 4 * Math.sin(phase * 0.6);
-        var baseY = TIP_Y + 18 + i * 4;
-        var midX = baseX + bend * 0.6 + 10;
-        var midY = baseY - len * 0.55;
-        var tipX = baseX + bend + 6 * Math.sin(phase * 1.3);
-        var tipY = baseY - len;
-        var w = 7 - i * 1.4;
-        c.strokeStyle = i === 0 ? 'rgba(255,244,200,0.70)' : (i === 1 ? 'rgba(255,200,90,0.55)' : 'rgba(255,140,40,0.40)');
-        c.lineWidth = w;
-        c.lineCap = 'round';
-        c.beginPath();
-        c.moveTo(baseX, baseY);
-        c.quadraticCurveTo(midX, midY, tipX, tipY);
-        c.stroke();
-      }
-      // tiny detached fleck, as in the reference
-      var fleckA = 0.45 + 0.35 * Math.sin(tNow * 6.2);
-      c.fillStyle = 'rgba(255,210,120,' + (0.55 * fleckA) + ')';
-      var fx = TIP_X + 22 + 6 * Math.sin(tNow * 4.1);
-      var fy = TIP_Y - 8 + 5 * Math.cos(tNow * 5.0);
-      c.beginPath();
-      c.ellipse(fx, fy, 2.6, 4.2, 0.4 + 0.2 * Math.sin(tNow * 3), 0, Math.PI * 2);
-      c.fill();
+      c.translate(TIP_X + sway * 0.35, NECK_Y);
+      c.rotate(curl);
+      c.scale(1 + Math.abs(sway) * 0.001, stretch);
+      c.translate(-(TIP_X + sway * 0.35), -NECK_Y);
+      // Deep overlap past the neck so rotation never leaves a gap.
+      c.drawImage(bodyImg, 0, 0, IMG_W, NECK_Y + 36, 0, 0, IMG_W, NECK_Y + 36);
       c.restore();
     }
 
-    function drawParticles(c, now) {
-      var i, a, e, d, s;
-      // faint smoke first
+    function drawRim(c, tNow) {
+      if (!outline || !outline.length) return;
+      c.save();
+      c.lineJoin = 'round';
+      c.lineCap = 'round';
+      var layers = [
+        { w: 8, col: 'rgba(255,110,30,0.20)', amp: 1.1 },
+        { w: 4.2, col: 'rgba(255,190,80,0.48)', amp: 1.0 },
+        { w: 1.8, col: 'rgba(255,244,210,0.70)', amp: 0.85 }
+      ];
+      var li, i, pt, a, r, u, disp;
+      for (li = 0; li < layers.length; li++) {
+        var L = layers[li];
+        c.strokeStyle = L.col;
+        c.lineWidth = L.w;
+        c.beginPath();
+        for (i = 0; i < outline.length; i++) {
+          pt = outline[i];
+          u = pt.upper ? 1 : 0.28;
+          disp = n1(tNow * 12.4 + i * 0.37, 0.7) * 6 * u * L.amp
+            + n1(tNow * 7.1 + i * 0.18, 2.8) * 4 * u * L.amp
+            + flare * 4 * u;
+          r = pt.r + disp;
+          a = pt.a + n1(tNow * 8.2 + i * 0.2, 4.4) * 0.02 * u;
+          var x = BULB_CX + Math.cos(a) * r;
+          var y = BULB_CY + Math.sin(a) * r;
+          if (i === 0) c.moveTo(x, y);
+          else c.lineTo(x, y);
+        }
+        c.closePath();
+        c.stroke();
+      }
+      c.restore();
+    }
+
+    function drawTongues(c, tNow) {
+      c.save();
+      c.lineCap = 'round';
+      c.lineJoin = 'round';
+      var i;
+      for (i = 0; i < tongues.length; i++) {
+        var tg = tongues[i];
+        var u = clamp((tNow - tg.born) / tg.life, 0, 1);
+        // grow quickly, then taper off — like the gif's short lick cycles
+        var env = u < 0.4 ? u / 0.4 : Math.max(0, 1 - (u - 0.4) / 0.6);
+        env = env * env * (3 - 2 * env);
+        var len = tg.maxLen * env;
+        if (len < 4) continue;
+        var wob = n1(tNow * 10 + tg.seed, 1.5);
+        var tipX = tg.baseX + tg.curl * (16 + len * 0.35) * (0.6 + 0.4 * wob) + n1(tNow * 14 + tg.seed, 3) * 8;
+        var tipY = tg.baseY - len;
+        var midX = tg.baseX + (tipX - tg.baseX) * 0.45 + n1(tNow * 9 + tg.seed, 2.2) * 12;
+        var midY = tg.baseY - len * 0.5;
+        var w = tg.width * (0.55 + 0.45 * env);
+        c.strokeStyle = tg.hot
+          ? ('rgba(255,244,210,' + (0.55 + 0.35 * env) + ')')
+          : ('rgba(255,170,70,' + (0.40 + 0.35 * env) + ')');
+        c.lineWidth = w;
+        c.beginPath();
+        c.moveTo(tg.baseX, tg.baseY);
+        c.quadraticCurveTo(midX, midY, tipX, tipY);
+        c.stroke();
+        if (tg.hot) {
+          c.strokeStyle = 'rgba(255,250,230,0.7)';
+          c.lineWidth = w * 0.35;
+          c.beginPath();
+          c.moveTo(tg.baseX, tg.baseY);
+          c.quadraticCurveTo(midX, midY, tipX, tipY);
+          c.stroke();
+        }
+      }
+      c.restore();
+    }
+
+    function drawAttachedDrips(c, tNow, xf) {
+      var i, d;
+      c.save();
+      c.fillStyle = 'rgba(255,170,70,0.95)';
+      c.strokeStyle = 'rgba(255,200,110,0.85)';
+      c.lineCap = 'round';
+      for (i = 0; i < drops.length; i++) {
+        d = drops[i];
+        if (!d.attached) continue;
+        var w = Math.max(1.2, d.r * (1 - d.stretch / (d.maxStretch + 8)));
+        c.lineWidth = w;
+        c.beginPath();
+        c.moveTo(d.sx, d.sy);
+        c.lineTo(d.sx + n1(tNow * 6, i) * 1.5, d.sy + d.stretch);
+        c.stroke();
+        c.beginPath();
+        c.ellipse(d.sx, d.sy + d.stretch, w * 0.7, w * 1.15, 0, 0, Math.PI * 2);
+        c.fill();
+      }
+      c.restore();
+    }
+
+    function drawLicks(c, tNow) {
+      drawTongues(c, tNow);
+    }
+
+    function drawParticles(c, now, xf) {
+      var i, a, e, d, s, b;
       for (i = 0; i < smokes.length; i++) {
         s = smokes[i];
         a = 1 - (now - s.born) / s.life;
-        a = a * a * 0.10;
+        a = a * a * 0.16;
         if (a <= 0) continue;
-        c.fillStyle = 'rgba(80,40,30,' + a + ')';
+        c.fillStyle = 'rgba(70,36,28,' + a + ')';
         c.beginPath();
-        c.ellipse(s.x, s.y, s.r, s.r * 1.15, 0, 0, Math.PI * 2);
+        c.ellipse(s.x, s.y, s.r, s.r * 1.2, 0, 0, Math.PI * 2);
         c.fill();
+      }
+      for (i = 0; i < bits.length; i++) {
+        b = bits[i];
+        a = 1 - (now - b.born) / b.life;
+        a = Math.max(0, a);
+        c.save();
+        c.translate(b.x, b.y);
+        c.rotate(b.rot);
+        c.fillStyle = 'rgba(255,190,90,' + (0.85 * a) + ')';
+        c.beginPath();
+        c.ellipse(0, 0, b.r * 0.55, b.r * b.tall, 0, 0, Math.PI * 2);
+        c.fill();
+        c.restore();
       }
       for (i = 0; i < embers.length; i++) {
         e = embers[i];
         a = 1 - (now - e.born) / e.life;
         a = Math.max(0, a);
         var col = e.hue < 0.45 ? '255,230,160' : (e.hue < 0.8 ? '255,180,80' : '255,255,230');
-        c.fillStyle = 'rgba(' + col + ',' + (0.85 * a) + ')';
+        c.fillStyle = 'rgba(' + col + ',' + (0.9 * a) + ')';
         c.beginPath();
         c.arc(e.x, e.y, e.r * (0.7 + 0.3 * a), 0, Math.PI * 2);
         c.fill();
       }
       for (i = 0; i < drops.length; i++) {
         d = drops[i];
+        if (d.attached) continue;
         a = 1 - (now - d.born) / d.life;
         a = Math.max(0, a);
-        c.fillStyle = 'rgba(255,170,70,' + (0.9 * a) + ')';
+        c.fillStyle = 'rgba(255,170,70,' + (0.92 * a) + ')';
         c.beginPath();
-        c.ellipse(d.x, d.y, d.r * 0.7, d.r * 1.35, 0, 0, Math.PI * 2);
+        c.ellipse(d.x, d.y, d.r * 0.55 * S, d.r * 1.45 * S, 0, 0, Math.PI * 2);
         c.fill();
       }
     }
@@ -1033,22 +1203,37 @@
       ctx.scale(xf.scx, xf.scy);
       ctx.translate(-FACE_CX, -FACE_CY);
 
-      // Pulsing pre-rendered glow under the body (no filter).
+      // Irregular glow pulse (pre-rendered, no CSS/canvas filters).
       if (glowCvs) {
-        var pulse = 0.72 + 0.28 * (0.5 + 0.5 * Math.sin(now * 2.15));
-        var gw = (SOLID_W + 260);
-        var gh = gw;
+        var pulse = 0.62
+          + 0.20 * (0.5 + 0.5 * Math.sin(now * 2.05))
+          + 0.12 * n1(now * 5.6, 1.3)
+          + 0.10 * flare;
+        pulse = clamp(pulse, 0.45, 1.05);
+        var gw = (SOLID_W + 270);
+        var gh = gw * (1 + 0.04 * n1(now * 3.4, 2));
         ctx.globalAlpha = pulse;
         ctx.drawImage(glowCvs, BULB_CX - gw / 2, BULB_CY - gh * 0.46, gw, gh);
         ctx.globalAlpha = 1;
       }
 
-      ctx.drawImage(bodyImg, 0, 0, IMG_W, IMG_H);
+      // Lower body (bulb, face area, painted drips) stays planted.
+      // Brightness flicker on the painted body, no filters.
+      var bodyA = 0.88 + 0.12 * (0.5 + 0.5 * n1(now * 14.2, 0.6)) + 0.06 * flare;
+      ctx.globalAlpha = clamp(bodyA, 0.82, 1);
+      var dripStretch = 1 + 0.04 * n1(now * 6.2, 2.4);
+      var mid = NECK_Y + 8;
+      ctx.drawImage(bodyImg, 0, mid, IMG_W, IMG_H - mid, 0, mid, IMG_W, (IMG_H - mid) * dripStretch);
+      drawWarpedTip(ctx, now);
+      ctx.globalAlpha = 1;
+
+      drawRim(ctx, now);
       drawLicks(ctx, now);
+      drawAttachedDrips(ctx, now, xf);
       drawFace(ctx, now);
       ctx.restore();
 
-      drawParticles(ctx, now);
+      drawParticles(ctx, now, xf);
     }
 
     function update(dt, now) {
@@ -1123,25 +1308,21 @@
         try { canvas.setPointerCapture(ev.pointerId); } catch (e) {}
       }
       var dist = Math.hypot(p.x - pos.x, p.y - pos.y);
-      if (dist < hitRadius() * 1.15) {
-        pokeUntil = time + 0.85;
+      look.tx = clamp((p.x - pos.x) / (80 * S), -1, 1);
+      look.ty = clamp((p.y - pos.y) / (80 * S), -1, 1);
+      look.until = time + 1.6;
+      if (dist < hitRadius() * 1.2) {
+        pokeUntil = time + 0.7;
         var ang = Math.atan2(pos.y - p.y, pos.x - p.x);
-        pos.vx += Math.cos(ang) * 220 * S;
-        pos.vy += Math.sin(ang) * 220 * S;
-        squash = 0.18;
-        look.tx = clamp((p.x - pos.x) / (80 * S), -1, 1);
-        look.ty = clamp((p.y - pos.y) / (80 * S), -1, 1);
-        look.until = time + 1.4;
-      } else {
-        look.tx = clamp((p.x - pos.x) / (140 * S), -1, 1);
-        look.ty = clamp((p.y - pos.y) / (140 * S), -1, 1);
-        look.until = time + 2.2;
-        if (!stillMode) {
-          var b = playable();
-          pos.tx = clamp(p.x, b.x0, b.x1);
-          pos.ty = clamp(p.y, b.y0, b.y1);
-          follow = { x: pos.tx, y: pos.ty };
-        }
+        pos.vx += Math.cos(ang) * 46 * S;
+        pos.vy += Math.sin(ang) * 46 * S;
+        squash = 0.14;
+        flare = 1;
+        spawnTongue(time, 'crown');
+        spawnTongue(time, Math.random() < 0.5 ? 'left' : 'right');
+        var xf0 = currentXF();
+        spawnEmber(time, xf0, TIP_X, TIP_Y, true);
+        spawnEmber(time, xf0, TIP_X, TIP_Y, true);
       }
     }
 
@@ -1149,24 +1330,15 @@
       if (!pointerDown) return;
       var p = clientPoint(ev);
       if (Math.hypot(p.x - downPt.x, p.y - downPt.y) > 8) moved = true;
-      if (follow && !stillMode) {
-        var b = playable();
-        follow.x = clamp(p.x, b.x0, b.x1);
-        follow.y = clamp(p.y, b.y0, b.y1);
-      }
+      look.tx = clamp((p.x - pos.x) / (100 * S), -1, 1);
+      look.ty = clamp((p.y - pos.y) / (100 * S), -1, 1);
+      look.until = time + 1.2;
     }
 
     function onUp(ev) {
       if (!pointerDown) return;
       pointerDown = false;
       pointerId = null;
-      if (follow) {
-        pos.tx = follow.x;
-        pos.ty = follow.y;
-        nextTarget = { x: follow.x, y: follow.y };
-        phase = 'move';
-      }
-      follow = null;
     }
 
     canvas.addEventListener('pointerdown', onDown);
@@ -1202,11 +1374,13 @@
       bodyImg = img;
       glowCvs = makeGlow();
       softDot = makeSoftDot();
+      outline = extractOutline(img);
       ready = true;
       flickerN = Math.random() * 10;
-      nextEmber = 0.1;
-      nextDrop = 0.4;
-      nextSmoke = 0.2;
+      nextEmber = 0.05;
+      nextDrop = 0.25;
+      nextSmoke = 0.12;
+      nextTongue = 0.02;
       requestAnimationFrame(function (ts) {
         last = ts * 0.001;
         requestAnimationFrame(loop);
