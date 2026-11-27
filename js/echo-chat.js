@@ -1,4 +1,4 @@
-/* Echo chat brain + shell. Key lives only in localStorage. Never commit a key. ?v=81 */
+/* Echo chat brain + shell. Key lives only in localStorage. Never commit a key. ?v=82 */
 (function () {
   'use strict';
 
@@ -278,9 +278,39 @@
   var msgs = loadHist();
   var busy = false;
   var abortCtl = null;
-  var avatarSrc = (function () {
-    return 'assets/echo-avatar.png';
-  })();
+  var avatarSrc = 'assets/echo-avatar.png';
+  var fallbackAva = new Image();
+  fallbackAva.src = avatarSrc;
+
+  function stampFallback(ava) {
+    if (!ava || ava.getAttribute('data-stamped') === '1') return;
+    if (!fallbackAva.complete || !fallbackAva.naturalWidth) return;
+    var g = ava.getContext('2d');
+    if (!g) return;
+    g.clearRect(0, 0, ava.width, ava.height);
+    g.drawImage(fallbackAva, 0, 0, ava.width, ava.height);
+  }
+
+  function makeAva(live) {
+    var ava = document.createElement('canvas');
+    ava.className = 'ava' + (live ? ' ava-live' : '');
+    ava.width = 64;
+    ava.height = 64;
+    ava.setAttribute('aria-hidden', 'true');
+    stampFallback(ava);
+    if (!fallbackAva.complete) {
+      fallbackAva.addEventListener('load', function () { stampFallback(ava); });
+    }
+    return ava;
+  }
+
+  function markLiveAva(el) {
+    if (!logEl) return;
+    var all = logEl.querySelectorAll('canvas.ava-live');
+    var i;
+    for (i = 0; i < all.length; i++) all[i].classList.remove('ava-live');
+    if (el) el.classList.add('ava-live');
+  }
 
   function setMode(chat) {
     document.body.classList.toggle('is-chat', !!chat);
@@ -322,11 +352,9 @@
     var row = document.createElement('div');
     row.className = 'row ' + role + (opts.thinking ? ' thinking' : '');
     if (role === 'agent' || opts.thinking) {
-      var img = document.createElement('img');
-      img.className = 'ava';
-      img.alt = '';
-      img.src = avatarSrc;
-      row.appendChild(img);
+      var ava = makeAva(true);
+      markLiveAva(ava);
+      row.appendChild(ava);
     }
     var bubble = document.createElement('div');
     bubble.className = 'bubble';
@@ -351,6 +379,8 @@
       m = msgs[i];
       addRow(m.role === 'user' ? 'user' : 'agent', m.text, { hint: m.hint });
     }
+    var avas = logEl.querySelectorAll('.row.agent canvas.ava');
+    markLiveAva(avas.length ? avas[avas.length - 1] : null);
     logEl.scrollTop = logEl.scrollHeight;
   }
 

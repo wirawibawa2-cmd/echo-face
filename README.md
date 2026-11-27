@@ -2,7 +2,7 @@
 
 Echo is a lively flame spirit you can talk to, on a black glass screen, built for iPhone Safari and Add to Home Screen. No build step, no libraries, and no API keys in this repo.
 
-**Live:** https://wirawibawa2-cmd.github.io/echo-face/?v=81
+**Live:** https://wirawibawa2-cmd.github.io/echo-face/?v=82
 
 This is a standalone project. It is not Kira, and it is not the other Echo app repo.
 

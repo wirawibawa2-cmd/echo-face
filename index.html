@@ -10,18 +10,18 @@
   <meta name="theme-color" content="#000000">
   <meta name="color-scheme" content="dark">
   <meta name="description" content="Echo — a friendly fire spirit you can talk to.">
-  <link rel="manifest" href="manifest.webmanifest?v=81">
-  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=81">
-  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=81">
-  <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png?v=81">
-  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=81">
-  <link rel="shortcut icon" href="favicon.ico?v=81">
+  <link rel="manifest" href="manifest.webmanifest?v=82">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=82">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=82">
+  <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png?v=82">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=82">
+  <link rel="shortcut icon" href="favicon.ico?v=82">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/echo-app.css?v=81">
+  <link rel="stylesheet" href="css/echo-app.css?v=82">
   <title>Echo</title>
-  <!-- echo-live-v81 -->
+  <!-- echo-live-v82 -->
 </head>
 <body class="home">
   <div id="ember" aria-hidden="true"></div>
@@ -85,7 +85,7 @@
     'use strict';
 
     // Cache-bust static assets so iPhone Safari picks up this version.
-    var ASSET_Q = '?v=81';
+    var ASSET_Q = '?v=82';
     function assetUrl(path) {
       return path + ASSET_Q;
     }
@@ -1796,6 +1796,74 @@
       updateParticles(dt, now, xf);
     }
 
+
+    var miniAva = null;
+    var miniAvaCtx = null;
+    var MINI_AVA = 64;
+
+    function ensureMiniAva() {
+      if (miniAvaCtx) return miniAvaCtx;
+      miniAva = document.createElement('canvas');
+      miniAva.width = MINI_AVA;
+      miniAva.height = MINI_AVA;
+      miniAvaCtx = miniAva.getContext('2d', { alpha: true });
+      return miniAvaCtx;
+    }
+
+    function renderMiniAva() {
+      var g = ensureMiniAva();
+      g.clearRect(0, 0, MINI_AVA, MINI_AVA);
+      var srcW = canvas && canvas.width;
+      var srcH = canvas && canvas.height;
+      if (!srcW || !srcH) return;
+      // Tight crop around the flame body so a 32px circle reads clearly.
+      var crop = 168;
+      var cx = W / 2;
+      var cy = H / 2 - 8;
+      var sx = (cx - crop / 2) * dpr;
+      var sy = (cy - crop / 2) * dpr;
+      var s = crop * dpr;
+      if (sx < 0) sx = 0;
+      if (sy < 0) sy = 0;
+      if (sx + s > srcW) sx = Math.max(0, srcW - s);
+      if (sy + s > srcH) sy = Math.max(0, srcH - s);
+      s = Math.min(s, srcW - sx, srcH - sy);
+      if (s <= 0) return;
+      if (colorReady && flameCanvas && flameCanvas.width) {
+        g.drawImage(flameCanvas, sx, sy, s, s, 0, 0, MINI_AVA, MINI_AVA);
+      }
+      g.drawImage(canvas, sx, sy, s, s, 0, 0, MINI_AVA, MINI_AVA);
+    }
+
+    function syncMiniAvatars() {
+      var nodes = document.getElementsByClassName('ava');
+      if (!nodes.length || !canvas || !canvas.width) return;
+      var list = [];
+      var i, el, need = false;
+      for (i = 0; i < nodes.length; i++) {
+        el = nodes[i];
+        if (el.tagName !== 'CANVAS') continue;
+        if (el.classList.contains('ava-live') || el.getAttribute('data-stamped') !== '1') {
+          list.push(el);
+          need = true;
+        }
+      }
+      if (!need) return;
+      renderMiniAva();
+      for (i = 0; i < list.length; i++) {
+        el = list[i];
+        if (el.width !== MINI_AVA || el.height !== MINI_AVA) {
+          el.width = MINI_AVA;
+          el.height = MINI_AVA;
+        }
+        var g = el.getContext('2d');
+        if (!g) continue;
+        g.clearRect(0, 0, MINI_AVA, MINI_AVA);
+        g.drawImage(miniAva, 0, 0);
+        if (!el.classList.contains('ava-live')) el.setAttribute('data-stamped', '1');
+      }
+    }
+
     function draw(now) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       var xf = currentXF();
@@ -1822,6 +1890,7 @@
         }
         if (!fpsFrames) fpsFrames = now;
       }
+      syncMiniAvatars();
     }
 
     function loop(ts) {
@@ -2142,6 +2211,6 @@
     img.src = assetUrl('assets/flame-body.png');
   })();
   </script>
-  <script src="js/echo-chat.js?v=81"></script>
+  <script src="js/echo-chat.js?v=82"></script>
 </body>
 </html>
