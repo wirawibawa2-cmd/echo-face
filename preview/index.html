@@ -182,7 +182,7 @@
 
     var EXPR = {};
     EXPR.happy = pCircle({ mouthCurve: 1, mouthW: 0.70 });
-    EXPR.neutral = pCircle({ mouthCurve: 0.45, mouthW: 0.55, mouthThick: 0.20 });
+    EXPR.neutral = pCircle({ mouthCurve: 0, mouthW: 1.36, mouthOpen: 1, mouthThick: 0.22 });
     EXPR.sad = pCircle({ mouthCurve: -1, mouthW: 0.70, lookBiasY: 0.22 });
     EXPR.veryHappy = pCircle({
       lCircle: 0, rCircle: 0, lCaret: 1, rCaret: 1,
@@ -265,6 +265,12 @@
     var flipTex = null;
     var flipCumul = [];
     var flipTotal = 1;
+    var colorReady = false;
+    var colorMeta = null;
+    var colorSheets = [];
+    var flame2d = null;
+    var ANCHOR_X = FACE_CX;
+    var ANCHOR_Y = FACE_CY;
 
     var canvas = document.getElementById('c');
     var ctx = canvas.getContext('2d', { alpha: true, desynchronized: true });
@@ -335,16 +341,17 @@
     }
 
     function bodyScale() {
+      if (colorReady) return clamp(Math.min(W, H) / 390, 0.72, 1.55) * 1.22;
       return (124 * S) / SOLID_W;
     }
 
     function extents() {
       var sc = bodyScale();
       return {
-        left: (FACE_CX - SOLID_L) * sc + 22,
-        right: (SOLID_R - FACE_CX) * sc + 22,
-        top: (FACE_CY - SOLID_T) * sc + 40,
-        bot: (SOLID_B - FACE_CY) * sc + 26
+        left: (ANCHOR_X - SOLID_L) * sc + 22,
+        right: (SOLID_R - ANCHOR_X) * sc + 22,
+        top: (ANCHOR_Y - SOLID_T) * sc + 40,
+        bot: (SOLID_B - ANCHOR_Y) * sc + 26
       };
     }
 
@@ -759,6 +766,7 @@
       S = clamp(Math.min(W, H) / 430, 0.72, 1.55);
       placeCenter(true);
       if (glOk) resizeFlameGL();
+      else if (flame2d) resizeFlame2D();
     }
 
     function placeCenter(init) {
@@ -959,8 +967,12 @@
 
     function currentXF() {
       var sc = bodyScale();
-      var flickX = 1 + 0.008 * Math.sin(time * 15.4) + 0.005 * Math.sin(time * 27.0 + flickerN);
-      var flickY = 1 + 0.014 * Math.sin(time * 12.8 + 0.7) + 0.007 * Math.sin(time * 21.0 + 1.4);
+      var flickX = 1;
+      var flickY = 1;
+      if (!colorReady) {
+        flickX = 1 + 0.008 * Math.sin(time * 15.4) + 0.005 * Math.sin(time * 27.0 + flickerN);
+        flickY = 1 + 0.014 * Math.sin(time * 12.8 + 0.7) + 0.007 * Math.sin(time * 21.0 + 1.4);
+      }
       return {
         x: pos.x,
         y: pos.y,
@@ -1223,6 +1235,50 @@
       return eyeBottom + R * Math.abs(curve) + t / 2;
     }
 
+    function fillCutoutEllipse(c, x, y, rx, ry) {
+      if (rx < 0.4 || ry < 0.4) return;
+      c.save();
+      c.beginPath();
+      c.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+      var g = c.createRadialGradient(x, y + ry * 0.18, rx * 0.08, x, y, Math.max(rx, ry));
+      g.addColorStop(0, '#140603');
+      g.addColorStop(0.62, '#2a0c08');
+      g.addColorStop(0.84, '#6a220c');
+      g.addColorStop(1, '#e07020');
+      c.fillStyle = g;
+      c.fill();
+      c.strokeStyle = 'rgba(255, 140, 40, 0.9)';
+      c.lineWidth = Math.max(1.15, Math.min(rx, ry) * 0.14);
+      c.lineCap = 'round';
+      c.lineJoin = 'round';
+      c.stroke();
+      c.restore();
+    }
+
+    function strokeCutout(c, pts, thick) {
+      if (!pts || pts.length < 2) return;
+      c.save();
+      c.lineCap = 'round';
+      c.lineJoin = 'round';
+      c.beginPath();
+      c.moveTo(pts[0].x, pts[0].y);
+      for (var i = 1; i < pts.length; i++) c.lineTo(pts[i].x, pts[i].y);
+      c.strokeStyle = 'rgba(255, 132, 40, 0.95)';
+      c.lineWidth = thick + Math.max(1.5, thick * 0.32);
+      c.stroke();
+      c.strokeStyle = '#1a0704';
+      c.lineWidth = thick;
+      c.stroke();
+      c.restore();
+    }
+
+    function applyFaceFrame(now) {
+      if (!colorReady || !colorMeta || !colorMeta.faceX) return;
+      var i = flipFrameAt(now);
+      FACE_CX = colorMeta.faceX[i];
+      FACE_CY = colorMeta.faceY[i];
+    }
+
     function drawEyeStyle(c, cx, cy, D, kind, dir, rot, open, alpha) {
       if (alpha < 0.04) return;
       c.save();
@@ -1235,6 +1291,49 @@
       c.strokeStyle = faceInk;
       c.lineCap = 'round';
       c.lineJoin = 'round';
+      if (colorReady) {
+        if (kind === 'circle') {
+          var ryC = r * Math.max(0.16, 1 - open);
+          fillCutoutEllipse(c, 0, 0, r, ryC);
+        } else if (kind === 'happy') {
+          var ptsH = [];
+          var nH = 10, rxH = D * 0.46, ryH = D * 0.28;
+          for (var iH = 0; iH <= nH; iH++) {
+            var tH = iH / nH;
+            var aH = Math.PI + tH * Math.PI;
+            ptsH.push({ x: Math.cos(aH) * rxH, y: Math.sin(aH) * ryH + D * 0.08 });
+          }
+          strokeCutout(c, ptsH, thick * 1.25);
+        } else if (kind === 'sad') {
+          var ptsS = [];
+          var nS = 10, rxS = D * 0.46, ryS = D * 0.28;
+          for (var jS = 0; jS <= nS; jS++) {
+            var tS = jS / nS;
+            var aS = tS * Math.PI;
+            ptsS.push({ x: Math.cos(aS) * rxS, y: Math.sin(aS) * ryS - D * 0.08 });
+          }
+          strokeCutout(c, ptsS, thick * 1.25);
+        } else if (kind === 'caret') {
+          var hC = D * 0.28, wC = D * 0.42;
+          strokeCutout(c, [{ x: -wC, y: hC * 0.3 }, { x: 0, y: -hC }, { x: wC, y: hC * 0.3 }], thick * 1.3);
+        } else if (kind === 'chev') {
+          var sC = D * 0.38 * (dir || 1);
+          strokeCutout(c, [
+            { x: -sC * 0.15, y: -sC * 0.85 },
+            { x: sC * 0.7, y: 0 },
+            { x: -sC * 0.15, y: sC * 0.85 }
+          ], thick * 1.3);
+        } else if (kind === 'ex') {
+          var kC = D * 0.36;
+          strokeCutout(c, [{ x: -kC, y: -kC }, { x: kC, y: kC }], thick * 1.2);
+          strokeCutout(c, [{ x: kC, y: -kC }, { x: -kC, y: kC }], thick * 1.2);
+        } else if (kind === 'flat' || kind === 'slit') {
+          var slC = D * (kind === 'slit' ? 0.48 : 0.42);
+          strokeCutout(c, [{ x: -slC, y: 0 }, { x: slC, y: 0 }], thick * 1.2);
+        }
+        c.restore();
+        return;
+      }
       if (kind === 'circle') {
         var ry = r * Math.max(0.08, 1 - open);
         c.beginPath();
@@ -1286,6 +1385,22 @@
       if (amt < 0.05) return;
       c.save();
       c.globalAlpha *= amt;
+      if (colorReady) {
+        var thickB = D * 0.13;
+        var liftB = D * 0.16;
+        var outB = D * 0.22;
+        var upB = -D * 0.58;
+        strokeCutout(c, [
+          { x: lx - outB, y: y + upB + liftB * 0.2 },
+          { x: lx + outB * 0.9, y: y + upB - liftB }
+        ], thickB);
+        strokeCutout(c, [
+          { x: rx + outB, y: y + upB + liftB * 0.2 },
+          { x: rx - outB * 0.9, y: y + upB - liftB }
+        ], thickB);
+        c.restore();
+        return;
+      }
       c.strokeStyle = faceInk;
       var thick = D * 0.11;
       // inner ends raised (worried)
@@ -1316,6 +1431,58 @@
       }
       var mx = FACE_CX;
       var my = mouthCenterY(curve, width / EYE_D, thick / EYE_D);
+
+      if (colorReady) {
+        if (open > 0.08) {
+          var rr = EYE_D * (0.42 + 0.26 * Math.min(1, open));
+          var oy = FACE_CY + EYE_D * 1.09;
+          if (open < 0.95) {
+            fillCutoutEllipse(c, mx, oy, width * 0.42, EYE_D * (0.12 + 0.28 * open));
+          } else {
+            fillCutoutEllipse(c, mx, oy, rr, rr);
+          }
+          return;
+        }
+        if (p.mouthWave > 0.08 && Math.abs(curve) < 0.85) {
+          var ptsW = [];
+          var nW = 16;
+          var halfW = width / 2;
+          var ampW = EYE_D * 0.14 * p.mouthWave;
+          var yW = FACE_CY + EYE_D / 2 + thick / 2;
+          for (var iW = 0; iW <= nW; iW++) {
+            var tW = iW / nW;
+            ptsW.push({ x: mx - halfW + tW * width, y: yW + Math.sin(tW * Math.PI * 2) * ampW });
+          }
+          strokeCutout(c, ptsW, thick * 1.15);
+          return;
+        }
+        if (Math.abs(curve) < 0.12) {
+          var yLineC = FACE_CY + EYE_D / 2 + thick / 2;
+          strokeCutout(c, [
+            { x: mx - width / 2, y: yLineC },
+            { x: mx + width / 2, y: yLineC }
+          ], thick * 1.15);
+          return;
+        }
+        var RC = Math.max(2, (width - thick) / 2);
+        var ptsC = [];
+        var nC = 18;
+        var a0C, a1C, ryC;
+        if (curve > 0) {
+          a0C = 20; a1C = 160;
+          ryC = RC * Math.min(1, 0.55 + 0.45 * curve);
+        } else {
+          a0C = 200; a1C = 340;
+          ryC = RC * Math.min(1, 0.55 + 0.45 * Math.abs(curve));
+        }
+        for (var jC = 0; jC <= nC; jC++) {
+          var uC = jC / nC;
+          var aC = (a0C + (a1C - a0C) * uC) * Math.PI / 180;
+          ptsC.push({ x: mx + Math.cos(aC) * RC, y: my + Math.sin(aC) * ryC });
+        }
+        strokeCutout(c, ptsC, thick * 1.15);
+        return;
+      }
 
       c.strokeStyle = faceInk;
       c.fillStyle = faceInk;
@@ -1586,15 +1753,16 @@
     }
 
     function drawFaceLayer(now, xf) {
+      applyFaceFrame(now);
       ctx.save();
       ctx.translate(xf.x, xf.y);
       ctx.rotate(xf.ang);
       ctx.scale(xf.scx, xf.scy);
-      ctx.translate(-FACE_CX, -FACE_CY);
-      if (!glOk) drawAttachedDrips(ctx, now, xf);
+      ctx.translate(-ANCHOR_X, -ANCHOR_Y);
+      if (!glOk && !colorReady) drawAttachedDrips(ctx, now, xf);
       drawFace(ctx, now);
       ctx.restore();
-      drawParticles(ctx, now, xf);
+      if (!colorReady) drawParticles(ctx, now, xf);
     }
 
     function drawEcho(now) {
@@ -1660,7 +1828,11 @@
     function draw(now) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       var xf = currentXF();
-      if (glOk) {
+      if (colorReady) {
+        ctx.clearRect(0, 0, W, H);
+        drawColorFlame(now, xf);
+        drawFaceLayer(now, xf);
+      } else if (glOk) {
         ctx.clearRect(0, 0, W, H);
         renderFlameGL(now, xf);
         drawFaceLayer(now, xf);
@@ -1797,6 +1969,92 @@
       return lo;
     }
 
+    function resizeFlame2D() {
+      if (!flameCanvas || !flame2d) return;
+      var fdpr = Math.min(window.devicePixelRatio || 1, 2);
+      var dw = Math.max(1, Math.round(W * fdpr));
+      var dh = Math.max(1, Math.round(H * fdpr));
+      if (flameCanvas.width !== dw || flameCanvas.height !== dh) {
+        flameCanvas.width = dw;
+        flameCanvas.height = dh;
+      }
+      flameCanvas.style.width = W + 'px';
+      flameCanvas.style.height = H + 'px';
+      flame2d.setTransform(fdpr, 0, 0, fdpr, 0, 0);
+    }
+
+    function drawColorFlame(now, xf) {
+      if (!flame2d || !colorReady || !colorMeta) return;
+      resizeFlame2D();
+      flame2d.setTransform(Math.min(window.devicePixelRatio || 1, 2), 0, 0, Math.min(window.devicePixelRatio || 1, 2), 0, 0);
+      flame2d.fillStyle = '#000';
+      flame2d.fillRect(0, 0, W, H);
+      var fi = flipFrameAt(now);
+      var per = colorMeta.perSheet;
+      var sheet = colorSheets[fi < per ? 0 : 1];
+      if (!sheet) return;
+      var local = fi % per;
+      var col = local % colorMeta.cols;
+      var row = Math.floor(local / colorMeta.cols);
+      var sx = col * colorMeta.cellW;
+      var sy = row * colorMeta.cellH;
+      flame2d.save();
+      flame2d.translate(xf.x, xf.y);
+      flame2d.rotate(xf.ang);
+      flame2d.scale(xf.scx, xf.scy);
+      flame2d.translate(-ANCHOR_X, -ANCHOR_Y);
+      flame2d.drawImage(sheet, sx, sy, colorMeta.cellW, colorMeta.cellH, 0, 0, colorMeta.cellW, colorMeta.cellH);
+      flame2d.restore();
+    }
+
+    function loadColorFlipbook() {
+      fetch('assets/flame-color.json').then(function (r) { return r.json(); }).then(function (meta) {
+        colorMeta = meta;
+        var acc = 0, i;
+        flipCumul = [];
+        for (i = 0; i < meta.durs.length; i++) {
+          acc += meta.durs[i];
+          flipCumul.push(acc);
+        }
+        flipTotal = meta.totalMs || acc;
+        flipMeta = meta;
+        ANCHOR_X = meta.anchorX;
+        ANCHOR_Y = meta.anchorY;
+        FACE_CX = meta.anchorX;
+        FACE_CY = meta.anchorY;
+        if (meta.eyeD) EYE_D = meta.eyeD;
+        if (meta.gap != null) GAP = meta.gap;
+        var files = meta.sheets || [];
+        var left = files.length;
+        if (!left) return;
+        colorSheets = new Array(files.length);
+        files.forEach(function (name, idx) {
+          var img = new Image();
+          img.onload = function () {
+            colorSheets[idx] = img;
+            left -= 1;
+            if (left <= 0) {
+              colorReady = true;
+              startLoop();
+              resize();
+            }
+          };
+          img.onerror = function () { console.warn('Echo color sheet failed', name); };
+          img.src = 'assets/' + name;
+        });
+      }).catch(function (e) { console.warn('Echo color flipbook', e); loadFallbackFlame(); });
+    }
+
+    function loadFallbackFlame() {
+      glOk = initFlameGL();
+      if (glOk) loadFlipbook();
+      if (glOk) {
+        canvas.style.background = 'transparent';
+      } else if (flameCanvas) {
+        flameCanvas.style.display = 'none';
+      }
+    }
+
     function loadFlipbook() {
       if (!gl) return;
       fetch('assets/flame-flipbook.json').then(function (r) { return r.json(); }).then(function (meta) {
@@ -1830,13 +2088,12 @@
       }).catch(function (e) { console.warn('Echo flipbook', e); });
     }
 
-    glOk = initFlameGL();
-    if (glOk) loadFlipbook();
-    if (glOk) {
-      canvas.style.background = 'transparent';
-    } else if (flameCanvas) {
-      flameCanvas.style.display = 'none';
+    if (flameCanvas) {
+      flame2d = flameCanvas.getContext('2d', { alpha: false, desynchronized: true });
     }
+    glOk = false;
+    canvas.style.background = 'transparent';
+    loadColorFlipbook();
     resize();
     setExpressionInternal(startName, true);
     if (autoOn) setAuto(true);
